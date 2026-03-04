@@ -4,7 +4,7 @@ import datetime
 from pathlib import Path
 # import yaml
 import time
-from models import *
+from modules import *
 
 ROOT = Path(__file__).parent.parent
 IMGS_PATH = ROOT / "clock"
@@ -36,9 +36,9 @@ def examDaysImg(
     """中考剩余时间"""
     textFont = ImageFont.truetype(*font)
     img = Image.new("RGBA", size, (0, 0, 0, 0))
-    ImageDraw.Draw(img).text(place, f"中考剩余{days}天", font=textFont, fill=fill)
+    ImageDraw.Draw(img).text(place, f"高考剩余{days}天", font=textFont, fill=fill)
     img.save(path / "exam.png")
-    logger.debug("绘制中考时间图片成功")
+    logger.debug("绘制高考时间图片成功")
 
 
 def BgImg(path: Path, size: tuple[int, int], *imgs: str):

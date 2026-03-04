@@ -1,11 +1,12 @@
 import sys
 import yaml
-import asyncio
+import anyio
 from datetime import datetime
 from pathlib import Path
+from threading import Thread
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
 from PySide6.QtGui import QIcon, QAction
-from models import *
+from modules import *
 
 
 ROOT = Path(__file__).parent
@@ -38,7 +39,7 @@ async def img():
                 config.size,
                 "bg.jpg",
                 "weather.png",
-                # "exam.png",
+                "exam.png",
                 f"month{nowTime.month}.png",
                 f"day{nowTime.day}.png",
                 f"hour{nowTime.hour}.png",
@@ -49,28 +50,38 @@ async def img():
 
             if i:
                 i = False
-        await asyncio.sleep(10)
+        await anyio.sleep(10)
 
+@logger.catch
+async def exam():
+    logger.info("开始运行考试模块")
+    examDate = datetime(2027, 6, 7)
+    while True:
+        makeImg.examDaysImg(
+            IMGS_PATH,
+            config.size,
+            config.place["exam"],
+            str((examDate - datetime.now()).days),
+            (config.font.name, config.font.size),
+            config.color,
+        )
+        await anyio.sleep(60)
 
 
 @logger.catch
 async def weater():
     logger.info("开始运行天气模块")
-    i = True  # 是否是第一次
     while True:
         logger.debug(f"{datetime.now().minute}")
-        if datetime.now().minute == 0 or i:
-            makeImg.weatherImg(
-                IMGS_PATH,
-                config.size,
-                config.place["weather"],
-                weather.getweather(),
-                config.font,
-                config.color,
-            )
-            if i:
-                i = False
-        await asyncio.sleep(50)
+        makeImg.weatherImg(
+            IMGS_PATH,
+            config.size,
+            config.place["weather"],
+            weather.getweather(),
+            config.font,
+            config.color,
+        )
+        await anyio.sleep(60)
 
 
 class TrayIcon(QSystemTrayIcon):
@@ -89,22 +100,19 @@ class TrayIcon(QSystemTrayIcon):
 
     def clickEvent(self, action: QAction):
         """点击托盘菜单时触发"""
+        app.quit()
 
-        sys.exit()
+async def main():
+    async with anyio.create_task_group() as taskGroup:
+        taskGroup.start_soon(weater)
+        taskGroup.start_soon(exam)
+        taskGroup.start_soon(img)
 
-async def run():
-    await asyncio.gather(weater(), img())
-
-@logger.catch
-def main():
+if __name__ == "__main__":
     logger.info("程序启动")
-    asyncio.run(run())
+    Thread(target=anyio.run, args=(main,), daemon=True).start()
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
     tray = TrayIcon()
     tray.show()
     sys.exit(app.exec())
-
-
-if __name__ == "__main__":
-    main()

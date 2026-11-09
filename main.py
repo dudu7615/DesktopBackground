@@ -33,7 +33,7 @@ async def img():
                 config.size,
                 "bg.jpg",
                 "weather.png",
-                "exam.png",
+                # "exam.png",
                 f"month{nowTime.month}.png",
                 f"day{nowTime.day}.png",
                 f"hour{nowTime.hour}.png",
@@ -42,8 +42,8 @@ async def img():
             )
             setBg.setBackGroundImg(IMGS_PATH / "result.png")
 
-            if i:
-                i = False
+        if i:
+            i = False
         await anyio.sleep(10)
 
 @logger.catch

@@ -6,7 +6,7 @@ from pathlib import Path
 from threading import Thread
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
 from PySide6.QtGui import QIcon, QAction
-from modules import *
+from modules import makeImg, setBg, weather, logger, Config
 
 
 ROOT = Path(__file__).parent
@@ -15,13 +15,7 @@ IMGS_PATH = ROOT / "clock"
 _config = yaml.load(
     (IMGS_PATH / "config.yml").read_text(encoding="utf-8"), Loader=yaml.FullLoader
 )
-config = Config(
-    name=_config["name"],
-    size=(_config["size"][0], _config["size"][1]),
-    font=Font(*_config["font"]),
-    color=(_config["color"][0], _config["color"][1], _config["color"][2]),
-    place=_config["place"],
-)
+config = Config.model_validate(_config)
 
 
 @logger.catch

@@ -2,12 +2,13 @@ from loguru import logger
 from pathlib import Path
 import datetime
 
+__all__ = ["logger"]
 
-LOG = Path(__file__).parent.parent / "log"
-LOG.mkdir(exist_ok=True)
+# LOG = Path(__file__).parent.parent / "log"
+# LOG.mkdir(exist_ok=True)
 
-logDir = LOG / f"{datetime.datetime.now():%Y-%m-%d_%H-%M-%S}"
-logDir.mkdir(exist_ok=True)
+# logDir = LOG / f"{datetime.datetime.now():%Y-%m-%d_%H-%M-%S}"
+# logDir.mkdir(exist_ok=True)
 
 # logger.add(
 #     f"{logDir}/DEBUG.log",

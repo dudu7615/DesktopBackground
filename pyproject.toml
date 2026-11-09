@@ -9,6 +9,7 @@ dependencies = [
     "loguru>=0.7.3",
     "lxml>=6.0.2",
     "pillow>=12.1.1",
+    "pydantic>=2.13.4",
     "pyside6>=6.10.2",
     "pywin32>=311",
     "pyyaml>=6.0.3",

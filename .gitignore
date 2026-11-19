@@ -8,6 +8,7 @@ __pycache__/
 
 # Distribution / packaging
 .Python
+build/
 develop-eggs/
 dist/
 downloads/
@@ -29,7 +30,10 @@ MANIFEST
 #  Usually these files are written by a python script from a template
 #  before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
+# 模板生成的临时 spec 不入库，但 packaging/ 下是我们手写维护的正式 spec，
+# CI 和本机打包都靠它，必须提交（否则干净克隆根本打不了包）。
 *.spec
+!packaging/*.spec
 
 # Installer logs
 pip-log.txt

@@ -1,8 +1,8 @@
-import os
 import sys
-from pathlib import Path
 
 from loguru import logger
+
+from .paths import logDir
 
 __all__ = ["logger", "setupLogging"]
 
@@ -18,11 +18,11 @@ def setupLogging() -> None:
     if sys.stderr is None:
         logger.remove()
 
-    # 与运行时生成的图片放在同一处用户数据目录下（见 main.py 的 OUT_PATH）
-    logDir = (
-        Path(os.environ.get("LOCALAPPDATA", Path.home())) / "DesktopBackground" / "logs"
-    )
-    logDir.mkdir(parents=True, exist_ok=True)
+    # 每个安装位置一个日志文件：安装版与便携版可能同时开着，共用一个文件时
+    # loguru 的 rotation 属于不同进程、互不知情，会把对方的记录切走或写乱。
+    # 注意这是给诊断看的，不是多进程安全的审计日志。
+    directory = logDir()
+    directory.mkdir(parents=True, exist_ok=True)
     logger.add(
-        logDir / "app.log", level="INFO", rotation="1 MB", retention=3, enqueue=True
+        directory / "app.log", level="INFO", rotation="1 MB", retention=3, enqueue=True
     )

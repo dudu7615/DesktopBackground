@@ -119,10 +119,13 @@ Filename: "powershell.exe"; Parameters: "-NoProfile -NonInteractive -ExecutionPo
 
 [UninstallDelete]
 ; 运行时生成的图片与日志由主程序写在 %LOCALAPPDATA%\DesktopBackground\ 下，
-; 不是安装器装的，不显式删就会留在用户目录里。安装目录本身由 Inno 正常清理，
-; 这里只清运行期产物；用户自己改过的 config.yml 在 _internal\ 下，不受影响。
-Type: filesandordirs; Name: "{localappdata}\{#AppName}\runtime"
-Type: filesandordirs; Name: "{localappdata}\{#AppName}\logs"
+; 不是安装器装的，不显式删就会留在用户目录里。这里**只删本安装对应的那个
+; 子目录**（规则见下方 InstanceKey，与 modules/paths.py 的 instanceKey 一致）。
+; 不能删整个 runtime/logs 根——便携版用的是另一个子目录，删根会把它正在用的
+; 图一起清掉。
+Type: filesandordirs; Name: "{localappdata}\{#AppName}\runtime\{code:InstanceKey}"
+Type: filesandordirs; Name: "{localappdata}\{#AppName}\logs\{code:InstanceKey}"
+
 [Code]
 { 这是无窗口的托盘程序，Inno 的 Restart Manager 认不出它，不主动杀进程就会
   因为 exe 被占用而装不上。
@@ -164,6 +167,29 @@ function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
   KillRunningApp;
   Result := '';
+end;
+
+{ 与 modules/paths.py 的 instanceKey() 保持一致：{app} 转小写、非 ASCII
+  字母数字一律换成下划线、取末 80 个字符。两边算法不同步的话，卸载就清不到
+  自己的运行期数据（或者误删便携版的数据）。 }
+function InstanceKey(Param: String): String;
+var
+  S: String;
+  I: Int64;
+  C: Char;
+begin
+  S := Lowercase(ExpandConstant('{app}'));
+  for I := 1 to Length(S) do
+  begin
+    C := S[I];
+    if not (((C >= 'a') and (C <= 'z')) or ((C >= '0') and (C <= '9'))) then
+      S[I] := '_';
+  end;
+  if Length(S) > 80 then
+    S := Copy(S, Length(S) - 80 + 1, 80);
+  if Length(S) = 0 then
+    S := '_';
+  Result := S;
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);

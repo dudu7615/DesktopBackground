@@ -113,10 +113,12 @@ jobs:
     # 只有 main 上的构建才允许写仓库
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    # 单个发布组、不取消：所有版本串行发布。这样"是否 latest"的判断在发布
-    # 那一刻是准确的，不会出现旧版本后发、把 latest 指针拨回去。
+    # 同一版本重复触发串行跑即可。故意**不**把所有版本塞进同一个组：GitHub
+    # 每个组只保留一个排队中的 run，后来的版本会把排队的旧版本顶掉，那个版本
+    # 就永远发不出去。跨版本先后导致的 latest 指针问题，由发布后的
+    # "校正 latest" 步骤兜底。
     concurrency:
-      group: release-publish
+      group: release-publish-${{ needs.meta.outputs.version }}
       cancel-in-progress: false
     permissions:
       contents: write # softprops/action-gh-release 要建 Release、上传产物
@@ -140,7 +142,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           python3 - <<'PY'
-          import os, re, subprocess
+          import os, subprocess
 
           version = os.environ["APP_VERSION"]
           build_sha = os.environ["BUILD_SHA"]
@@ -150,28 +152,6 @@ jobs:
 
           def run(*args, check=True):
               return subprocess.run(args, capture_output=True, text=True, check=check)
-
-          def parse(v):
-              """PEP 440 近似：数字部分按段比较，带预发布后缀的低于同数字的正式版。"""
-              m = re.match(r"^(\d+(?:\.\d+)*)(.*)$", v)
-              if not m:
-                  return None
-              nums = tuple(int(x) for x in m.group(1).split("."))
-              # 补齐到等长再比较，1.2 与 1.2.0 视为相同
-              return nums, bool(m.group(2))
-
-          def is_newer(a, b):
-              pa, pb = parse(a), parse(b)
-              if pa is None or pb is None:
-                  return False
-              (na, prea), (nb, preb) = pa, pb
-              width = max(len(na), len(nb))
-              na += (0,) * (width - len(na))
-              nb += (0,) * (width - len(nb))
-              if na != nb:
-                  return na > nb
-              # 数字相同：正式版高于预发布版
-              return preb and not prea
 
           run("git", "fetch", "--tags", "--force", "--quiet")
 
@@ -189,12 +169,6 @@ jobs:
               names = set(res.stdout.split())
               published = res.returncode == 0 and exe in names and zip_name in names
 
-          # 已有更高版本 tag（1.2.0 先发完、1.1.0 后构建完）时，这次只能作为普通
-          # release，不能顶掉 latest。解析不了的 tag 直接忽略，不让它把构建搞挂。
-          tags = run("git", "tag", "--list", "v*").stdout.split()
-          others = [t[1:] for t in tags if t.startswith("v") and t != tag]
-          is_latest = not any(is_newer(t, version) for t in others)
-
           publish = not published and not tag_elsewhere
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
               for k, v in {
@@ -203,12 +177,11 @@ jobs:
                   "publish": str(publish).lower(),
                   "tag_elsewhere": str(tag_elsewhere).lower(),
                   "already_published": str(published).lower(),
-                  "is_latest": str(is_latest).lower(),
               }.items():
                   f.write(f"{k}={v}\n")
           print(
               f"版本 {version}，tag {tag}，已完整发布：{published}，"
-              f"tag 指向别处：{tag_elsewhere}，本次发布：{publish}，设为 latest：{is_latest}"
+              f"tag 指向别处：{tag_elsewhere}，本次发布：{publish}"
           )
           PY
 
@@ -221,12 +194,45 @@ jobs:
           target_commitish: ${{ github.sha }}
           name: DesktopBackground ${{ steps.ver.outputs.version }}
           generate_release_notes: true
-          make_latest: ${{ steps.ver.outputs.is_latest }}
-          # 上次传到一半失败时会留下已上传的那个文件；覆盖掉才能补齐
+          # 不传 make_latest：GitHub 默认把最新发布的设为 latest，两个版本并发时
+          # 顺序不定。先后统一由下面的"校正 latest 指针"步骤按版本号重新指定。
           overwrite_files: true
           files: |
-            dist/*.exe
+            dist/installer/*.exe
             dist/*.zip
+
+      - name: 校正 latest 指针
+        # 两个版本并发发布时，谁最后发谁会把 latest 抢过来。发布完按现有 Release
+        # 里最高的非预发布版本重新指定一次，结果与发布顺序无关。
+        if: steps.ver.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # 版本先后按 PEP 440 比较，交给 packaging，不自己写解析
+          python3 -m pip install --quiet packaging
+          python3 - <<'PY'
+          import json, subprocess, sys
+
+          from packaging.version import InvalidVersion, Version
+
+          out = subprocess.run(
+              ["gh", "release", "list", "--limit", "100", "--json", "tagName,isPrerelease"],
+              capture_output=True, text=True, check=True,
+          ).stdout
+          candidates = {}
+          for r in json.loads(out):
+              if r["isPrerelease"]:
+                  continue
+              try:
+                  candidates[r["tagName"]] = Version(r["tagName"].lstrip("v"))
+              except InvalidVersion:
+                  continue
+          if not candidates:
+              sys.exit(0)
+          best = max(candidates, key=lambda t: candidates[t])
+          print(f"最高版本 Release：{best}")
+          subprocess.run(["gh", "release", "edit", best, "--latest"], check=True)
+          PY
 
       - name: 没发 Release，说明原因
         if: steps.ver.outputs.publish != 'true'

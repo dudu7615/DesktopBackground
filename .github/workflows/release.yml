@@ -228,59 +228,54 @@ jobs:
             dist/*.zip
 
       - name: 校正 latest 指针
-        # 并发发布时 latest 指向取决于谁后跑完，所以发布后再校一次指针。
-        # 只跟"当前 latest"比较：本次版本更高才提升。两个 run 谁先谁后，
-        # 最终都会收敛到较高的版本。
-        # 重试时（publish 为 false 但已发布）也要跑：上次可能正卡在这一步。
+        # 多个版本的 publish job 可能并发跑（按版本分组是为了不丢版本），
+        # 谁后跑完谁就把 latest 抢走。这里不做"我是更高的，我要提升"，
+        # 而是每次发布后都把 latest 校正成**所有 Release 里版本最高的那个**。
+        # 这样结果与执行顺序无关：无论谁先谁后，最后都会收敛到同一个答案。
         #
-        # 不能改成"所有版本共用同一个 concurrency 组"来串行：GitHub 每个组
-        # 只保留一个排队中的 job，后来的版本会把排队中的旧版本顶掉，那个版本
-        # 就永远发不出去。
+        # 不能改成所有版本共用一个 concurrency 组来串行：GitHub 每组只保留
+        # 一个排队中的 job，后来的版本会把排队中的旧版本顶掉，那个版本就永远
+        # 发不出去。
+        # 重试时（publish 为 false 但已发布）也要跑：上次可能正卡在这一步。
         if: >-
           steps.ver.outputs.publish == 'true' ||
           steps.ver.outputs.already_published == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          APP_VERSION: ${{ needs.meta.outputs.version }}
-          IS_PRERELEASE: ${{ steps.ver.outputs.is_prerelease }}
           PYTHONPATH: ${{ github.workspace }}/.deps
         run: |
           python3 - <<'PY'
-          import json, os, subprocess, sys
+          import json, subprocess, sys
 
           from packaging.version import InvalidVersion, Version
 
-          version = os.environ["APP_VERSION"]
-          try:
-              current = Version(version)
-          except InvalidVersion:
-              print(f"::warning::版本号 {version} 不是合法 PEP 440，跳过 latest 校正")
-              sys.exit(0)
+          # 分页拉全所有 Release，不能只取前 100 个——版本很多时会漏掉最高的
+          out = subprocess.run(
+              ["gh", "api", "--paginate",
+               "repos/{owner}/{repo}/releases?per_page=100",
+               "--jq", '.[] | [.tag_name, .prerelease, .draft] | @tsv'],
+              capture_output=True, text=True, check=True,
+          ).stdout
 
-          # 预发布 Release 不能被设为 latest（GitHub 不允许），提前跳过
-          if os.environ.get("IS_PRERELEASE") == "true":
-              print(f"{version} 是预发布版本，不设为 latest")
-              sys.exit(0)
-
-          # 仓库当前标记为 latest 的 Release；还没有 Release 时 gh 会返回非零
-          res = subprocess.run(
-              ["gh", "api", "repos/{owner}/{repo}/releases/latest"],
-              capture_output=True, text=True,
-          )
-          if res.returncode == 0:
-              latest_tag = json.loads(res.stdout).get("tag_name", "")
+          candidates = {}
+          for line in out.splitlines():
+              parts = line.split("\t")
+              if len(parts) != 3:
+                  continue
+              tag, prerelease, draft = parts
+              if prerelease == "true" or draft == "true":
+                  continue
               try:
-                  latest = Version(latest_tag.lstrip("v"))
+                  candidates[tag] = Version(tag.lstrip("v"))
               except InvalidVersion:
-                  latest = None
-              if latest is not None and latest >= current:
-                  print(f"当前 latest 是 {latest_tag}，不低于 {version}，无需调整")
-                  sys.exit(0)
-          else:
-              print("仓库还没有 latest Release，直接标记")
+                  continue
+          if not candidates:
+              print("没有可用的 Release，跳过")
+              sys.exit(0)
 
-          subprocess.run(["gh", "release", "edit", f"v{version}", "--latest"], check=True)
-          print(f"已把 v{version} 标记为 latest")
+          best = max(candidates, key=lambda t: candidates[t])
+          subprocess.run(["gh", "release", "edit", best, "--latest"], check=True)
+          print(f"latest 已校正为 {best}")
           PY
 
       - name: 没发 Release，说明原因

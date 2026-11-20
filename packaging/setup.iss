@@ -78,12 +78,18 @@ Name: "startupicon"; Description: "添加到开机启动"; GroupDescription: "�
 [InstallDelete]
 ; 这里只清确定可以提前删的东西。**不要在这里删 main.exe**：Inno 会先处理
 ; [InstallDelete]、再复制 [Files]，而新的启动器叫 DesktopBackground.exe，
-; 万一复制阶段失败或被中断，旧安装就既没有 main.exe 也没有新 exe，彻底起不来。
+; 万一复制阶段失败，旧安装就既没有 main.exe 也没有新 exe，彻底起不来。
 ; 旧 main.exe 改在 [Code] 里安装成功后删除（见 RemoveOldLauncher）。
 ;
-; 旧 main.exe 由 [Code] 在安装成功后删除（见 RemoveOldLauncher）。
 ; 不在这里删 _internal：用户的 clock/config.yml 就在里面，而且先删后装，
 ; 安装中途失败旧程序会残缺。旧文件靠 [Files] 的 ignoreversion 覆盖。
+;
+; 关于"装到一半失败"：按 Inno 官方的 Installation Order，[InstallDelete]、
+; [Files]、[Icons] 这些都在卸载器落盘之前执行，这段期间取消或出错会被整体
+; 回滚（帮助文档原文："subsequent errors will not cause what was installed
+; before to be rolled back" 指的是卸载器落盘之后）。所以不需要自己搞
+; staging 目录。上面这条 main.exe 的原因是它有独立风险：它不在 [Files] 里，
+; 删掉之后没有任何东西会把它恢复。
 Type: files; Name: "{app}\icon.ico"
 
 [Files]

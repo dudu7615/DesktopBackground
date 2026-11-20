@@ -35,4 +35,4 @@ ISCC.exe /DAppVersion=1.1.0 packaging\setup.iss              # → dist\installe
 - `DesktopBackground-portable-<版本>.zip` —— 免安装版，解压双击 `DesktopBackground.exe`
 
 安装包会装到 `%LOCALAPPDATA%\DesktopBackground`，可选创建桌面快捷方式、开机启动。
-运行时生成的壁纸图写在同一处的 `runtime\` 目录，程序目录保持只读也能跑。
+运行时生成的壁纸图写在 `%LOCALAPPDATA%\DesktopBackground\runtime\` 下，程序目录保持只读也能跑；安装版与便携版各用一个子目录，不会互相覆盖。

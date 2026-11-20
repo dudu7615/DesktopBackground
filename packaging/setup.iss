@@ -5,10 +5,13 @@
 ; 产物在 dist\installer\DesktopBackground-Setup-<版本>.exe
 ;
 ; 安装范围只针对当前用户（PrivilegesRequired=lowest），不弹 UAC，装到
-; %LOCALAPPDATA% 下。这是刻意为之：程序运行时会往用户数据目录
-; %LOCALAPPDATA%\DesktopBackground\runtime 里写合成后的图片——不写安装目录，
-; 是为了让程序目录保持只读也不影响运行（比方说便携版解压进了 Program Files）。
-; 安装目录放 %LOCALAPPDATA% 仍然合适：免 UAC、卸载干净。
+; %LOCALAPPDATA% 下，并且**不允许**临时提升为管理员安装（见下方
+; PrivilegesRequired 附近的说明）。
+;
+; 程序运行时往用户数据目录 %LOCALAPPDATA%\DesktopBackground\runtime 里写合成后
+; 的图片——不写安装目录，是为了让程序目录保持只读也不影响运行（比方说便携版
+; 解压进了 Program Files）。安装目录放 %LOCALAPPDATA% 仍然合适：免 UAC、
+; 卸载干净。
 ;
 ; 注意：本文件里所有相对路径都相对**本文件所在目录**（packaging/）解析。
 ;
@@ -39,7 +42,10 @@ DisableDirPage=yes
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
-PrivilegesRequiredOverridesAllowed=dialog
+; 刻意不设 PrivilegesRequiredOverridesAllowed：安装目录在 %LOCALAPPDATA% 下、
+; 用户可写，而卸载时会经 powershell 执行 {app} 里的 killapp.ps1。一旦允许
+; 临时改成管理员安装/卸载，就等于给任何能写这个目录的人一个提权执行点。
+; 只允许当前用户安装就没有这个问题。
 OutputDir=..\dist\installer
 OutputBaseFilename={#AppName}-Setup-{#AppVersion}
 Compression=lzma2/ultra
@@ -103,9 +109,20 @@ Filename: "{app}\{#AppExeName}"; Description: "立即运行 {#AppName}"; Flags: 
 ; 只杀本安装目录下的进程（见下方 KillApp 的说明），别顺手关掉别人的同名程序。
 ; 顺带清掉旧版的 main.exe——从 V1.0.x 升级上来的机器上可能还开着它。
 ; ps1 不能直接当可执行文件跑，显式经 powershell.exe 调用。
+;
+; 这里没有可用的 [Code] 事件（编译进卸载程序的是 [Code] 里的代码，但事件
+; 函数名与安装器不同），所以直接调 {app}\killapp.ps1。之所以敢这么写，是因为
+; PrivilegesRequired=lowest 且不允许提升权限，卸载器始终以当前用户运行，
+; 替换这个脚本拿不到任何额外权限。
 Filename: "powershell.exe"; Parameters: "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{app}\killapp.ps1"" -ExePath ""{app}\{#AppExeName}"""; Flags: runhidden
 Filename: "powershell.exe"; Parameters: "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{app}\killapp.ps1"" -ExePath ""{app}\main.exe"""; Flags: runhidden
 
+[UninstallDelete]
+; 运行时生成的图片与日志由主程序写在 %LOCALAPPDATA%\DesktopBackground\ 下，
+; 不是安装器装的，不显式删就会留在用户目录里。安装目录本身由 Inno 正常清理，
+; 这里只清运行期产物；用户自己改过的 config.yml 在 _internal\ 下，不受影响。
+Type: filesandordirs; Name: "{localappdata}\{#AppName}\runtime"
+Type: filesandordirs; Name: "{localappdata}\{#AppName}\logs"
 [Code]
 { 这是无窗口的托盘程序，Inno 的 Restart Manager 认不出它，不主动杀进程就会
   因为 exe 被占用而装不上。

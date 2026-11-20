@@ -1,3 +1,4 @@
+import hashlib
 import os
 import sys
 from pathlib import Path
@@ -21,11 +22,16 @@ def _outputPath() -> Path:
     素材（config.yml、数字图、字体）是只读的，跟程序放一起；合成结果不能写回
     _internal/，否则安装目录不可写（比如把便携版解压进 Program Files）时合成
     直接失败。打包后用用户数据目录；开发时仍写 clock/，方便直接看效果。
+
+    安装版与便携版可能同时开着，为避免互相覆盖，各自用不同子目录：以 exe 所在
+    路径的哈希区分。安装目录与便携版解压位置不同，哈希也就不同。
     """
     if not getattr(sys, "frozen", False):
         return IMGS_PATH
     base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
-    return base / "DesktopBackground" / "runtime"
+    root = base / "DesktopBackground" / "runtime"
+    key = Path(sys.executable).parent.as_posix().lower()
+    return root / hashlib.sha1(key.encode("utf-8")).hexdigest()[:8]
 
 
 OUT_PATH = _outputPath()

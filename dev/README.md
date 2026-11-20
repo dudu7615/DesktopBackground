@@ -30,5 +30,5 @@ VS Code 里直接选 `main (linux win32 stub)` 这个调试配置，`launch.json
   `makeImg._fontFile()` 会优先用这个自带文件，所以 Linux 上不用装系统字体也能跑。
   只有把 `font.name` 换成系统字体名（比如 `msyh.ttc`）且本机没装时才会报
   `OSError: cannot open resource`，与假包无关。
-- 开发时合成结果仍写在 `clock/`（打包后改写到 `%LOCALAPPDATA%\DesktopBackground\runtime`），
+- 开发时合成结果仍写在 `clock/`（打包后改写到 `%LOCALAPPDATA%\DesktopBackground\runtime\<安装路径哈希>`），
   所以 Linux 上跑完会在 `clock/` 里留下 `result.png`、`weather.png`、`exam.png` 等未跟踪文件。

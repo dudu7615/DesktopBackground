@@ -3,15 +3,16 @@ name: release
 # 合并进 main（或直接推到 main）就出安装包；也可以手动触发，用来验证打包流程没坏。
 #
 # 版本号以 pyproject.toml 里的 version 为准。**只有 main 上的构建才会发 Release**：
-# 该版本还没有 Release（或 Release 里一个产物都没有，说明上次发到一半失败）才建，
-# 已经完整发布过就只留 CI 产物。手动触发跑别的分支时一律只打包不发布。
+# 该版本还没有完整的 Release（安装包和便携版都在才算）才建，已经完整发布过就
+# 只留 CI 产物。手动触发跑别的分支时一律只打包不发布。
 # 所以想真正发一个版本，就在 PR 里改 version 再合并。
 on:
   push:
     branches: [main]
   workflow_dispatch:
 
-# 默认只读；只有真正发 Release 的 job 才申请写权限
+# 默认只读；只有 publish job 申请写权限，且它只在 main 上运行。
+# 构建 job 接触的是分支上的代码，不能让它拿着能写仓库的 token。
 permissions:
   contents: read
 
@@ -41,15 +42,13 @@ jobs:
     runs-on: windows-latest
     # 按**版本号**排队，而不是按分支：连续合并两个版本时两个版本各有各的组，
     # 不会被后来的 run 顶掉（按分支分组时，待跑的 run 只保留最后一个）。
-    # 同一个版本重复触发则排队跑，不并发发布，避免两个 run 抢同一份 Release 产物。
+    # 同一个版本重复触发则排队跑。
     #
     # 非 main 的手动触发单独一组：它不发布，却和 main 的 run 共用组的话，
-    # 一个手动 run 就能把排队中的 main 发布 run 顶掉，那个版本就发不出去了。
+    # 一个手动 run 就能把排队中的 main 构建顶掉。
     concurrency:
       group: release-${{ github.ref == 'refs/heads/main' && 'main' || 'validate' }}-${{ needs.meta.outputs.version }}
       cancel-in-progress: false
-    permissions:
-      contents: write # softprops/action-gh-release 要建 Release、上传产物
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -75,70 +74,28 @@ jobs:
         # 钉版本：新的 Inno 大版本偶尔会改向导/编译器行为
         run: choco install innosetup --version=6.5.4 --no-progress -y
 
-      - name: 判断该不该发 Release
-        id: ver
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          $v = "${{ needs.meta.outputs.version }}"
-          $tag = "v$v"
-          git fetch --tags --force --quiet
-
-          # 只有 main 上的构建才发布；手动触发跑别的分支时只验证打包。
-          $onMain = "${{ github.ref }}" -eq "refs/heads/main"
-
-          # 发布完成 = 两个产物都在（安装包 + 便携版 zip）。只看"有没有产物"会把
-          # 传到一半失败的 Release 当成已完成，之后再也不补发。
-          $tagExists = [bool](git tag --list $tag)
-          $tagElsewhere = $false
-          $published = $false
-          if ($tagExists) {
-            # tag 指向别的提交：产物对应的是这次的源码，tag 却指着别处
-            if ((git rev-list -n1 $tag) -ne "${{ github.sha }}") { $tagElsewhere = $true }
-            $names = gh release view $tag --json assets --jq '.assets[].name' 2>$null
-            $hasExe = [bool]($names -match '\.exe$')
-            $hasZip = [bool]($names -match '\.zip$')
-            $published = ($LASTEXITCODE -eq 0 -and $hasExe -and $hasZip)
-          }
-
-          $publish = $onMain -and (-not $published)
-
-          # 已有更高的版本 tag（比如 1.2.0 先发完、1.1.0 后构建完）时，这次发的
-          # 只能是普通 release，不能顶掉 latest。按去掉 v 前缀后的 [version] 比较。
-          $isLatest = "true"
-          $existing = git tag --list "v*" |
-            ForEach-Object { $_.TrimStart('v') } |
-            Where-Object { $_ -match '^\d+(\.\d+)*$' -and $_.Trim() -ne $v }
-          foreach ($t in $existing) {
-            if ([version]$t -gt [version]$v) { $isLatest = "false"; break }
-          }
-
-          "version=$v" >> $env:GITHUB_OUTPUT
-          "tag=$tag" >> $env:GITHUB_OUTPUT
-          "publish=$($publish.ToString().ToLower())" >> $env:GITHUB_OUTPUT
-          "tag_elsewhere=$($tagElsewhere.ToString().ToLower())" >> $env:GITHUB_OUTPUT
-          "already_published=$($published.ToString().ToLower())" >> $env:GITHUB_OUTPUT
-          "is_latest=$isLatest" >> $env:GITHUB_OUTPUT
-          Write-Host "版本 $v，tag $tag，是否 main 构建：$onMain，是否已完整发布：$published，tag 是否指向别的提交：$tagElsewhere，本次发布：$publish，设为 latest：$isLatest"
-
       - name: 生成安装包
         shell: pwsh
+        env:
+          # 版本号来自分支里的 pyproject.toml，不能拼进脚本源码
+          APP_VERSION: ${{ needs.meta.outputs.version }}
         run: |
           # choco 装的是 6 还是 7 不确定，直接找 ISCC.exe，别写死路径
           $iscc = Get-ChildItem "C:\Program Files (x86)\Inno Setup*\ISCC.exe",
                                  "C:\Program Files\Inno Setup*\ISCC.exe" |
                   Select-Object -First 1 -ExpandProperty FullName
           if (-not $iscc) { throw "找不到 ISCC.exe" }
-          & $iscc "/DAppVersion=${{ needs.meta.outputs.version }}" packaging\setup.iss
+          & $iscc "/DAppVersion=$env:APP_VERSION" packaging\setup.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC 失败" }
 
       # 顺带发个免安装版，方便本机先试
       - name: 打包便携版
         shell: pwsh
+        env:
+          APP_VERSION: ${{ needs.meta.outputs.version }}
         run: |
           Compress-Archive -Path dist\DesktopBackground\* `
-            -DestinationPath "dist\DesktopBackground-portable-${{ needs.meta.outputs.version }}.zip"
+            -DestinationPath "dist\DesktopBackground-portable-$env:APP_VERSION.zip"
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -147,10 +104,116 @@ jobs:
             dist/installer/*.exe
             dist/DesktopBackground-portable-*.zip
 
+      - name: 不是 main 上的构建，不发布
+        if: github.ref != 'refs/heads/main'
+        run: echo "::notice::不是 main 上的构建，只打包验证，不发布 Release。"
+
+  publish:
+    needs: [meta, windows]
+    # 只有 main 上的构建才允许写仓库
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # 单个发布组、不取消：所有版本串行发布。这样"是否 latest"的判断在发布
+    # 那一刻是准确的，不会出现旧版本后发、把 latest 指针拨回去。
+    concurrency:
+      group: release-publish
+      cancel-in-progress: false
+    permissions:
+      contents: write # softprops/action-gh-release 要建 Release、上传产物
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          # 要查 tag 是否已存在、指向哪个提交
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: DesktopBackground-windows-${{ needs.meta.outputs.version }}
+          path: dist
+
+      - name: 判断该不该发 Release
+        id: ver
+        env:
+          # 这些值都可能来自分支内容（版本号读自 pyproject.toml），一律走环境变量
+          APP_VERSION: ${{ needs.meta.outputs.version }}
+          BUILD_SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import os, re, subprocess
+
+          version = os.environ["APP_VERSION"]
+          build_sha = os.environ["BUILD_SHA"]
+          tag = f"v{version}"
+          exe = f"DesktopBackground-Setup-{version}.exe"
+          zip_name = f"DesktopBackground-portable-{version}.zip"
+
+          def run(*args, check=True):
+              return subprocess.run(args, capture_output=True, text=True, check=check)
+
+          def parse(v):
+              """PEP 440 近似：数字部分按段比较，带预发布后缀的低于同数字的正式版。"""
+              m = re.match(r"^(\d+(?:\.\d+)*)(.*)$", v)
+              if not m:
+                  return None
+              nums = tuple(int(x) for x in m.group(1).split("."))
+              # 补齐到等长再比较，1.2 与 1.2.0 视为相同
+              return nums, bool(m.group(2))
+
+          def is_newer(a, b):
+              pa, pb = parse(a), parse(b)
+              if pa is None or pb is None:
+                  return False
+              (na, prea), (nb, preb) = pa, pb
+              width = max(len(na), len(nb))
+              na += (0,) * (width - len(na))
+              nb += (0,) * (width - len(nb))
+              if na != nb:
+                  return na > nb
+              # 数字相同：正式版高于预发布版
+              return preb and not prea
+
+          run("git", "fetch", "--tags", "--force", "--quiet")
+
+          published = False
+          tag_elsewhere = False
+          if run("git", "rev-parse", "-q", "--verify", f"refs/tags/{tag}", check=False).returncode == 0:
+              # tag 指向别的提交：target_commitish 不会移动已有 tag，硬发会把
+              # 这次的产物挂到一个源码对不上的 tag 上
+              head = run("git", "rev-list", "-n1", tag).stdout.strip()
+              tag_elsewhere = head != build_sha
+              # 完整发布 = 两个预期文件名都在。只看"有没有 .exe/.zip"会把传了旧
+              # 文件或传到一半的 Release 当成已完成。
+              res = run("gh", "release", "view", tag, "--json", "assets",
+                        "--jq", ".assets[].name", check=False)
+              names = set(res.stdout.split())
+              published = res.returncode == 0 and exe in names and zip_name in names
+
+          # 已有更高版本 tag（1.2.0 先发完、1.1.0 后构建完）时，这次只能作为普通
+          # release，不能顶掉 latest。解析不了的 tag 直接忽略，不让它把构建搞挂。
+          tags = run("git", "tag", "--list", "v*").stdout.split()
+          others = [t[1:] for t in tags if t.startswith("v") and t != tag]
+          is_latest = not any(is_newer(t, version) for t in others)
+
+          publish = not published and not tag_elsewhere
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              for k, v in {
+                  "version": version,
+                  "tag": tag,
+                  "publish": str(publish).lower(),
+                  "tag_elsewhere": str(tag_elsewhere).lower(),
+                  "already_published": str(published).lower(),
+                  "is_latest": str(is_latest).lower(),
+              }.items():
+                  f.write(f"{k}={v}\n")
+          print(
+              f"版本 {version}，tag {tag}，已完整发布：{published}，"
+              f"tag 指向别处：{tag_elsewhere}，本次发布：{publish}，设为 latest：{is_latest}"
+          )
+          PY
+
       - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
-        # tag 已存在却指向别的提交时绝不发布：target_commitish 不会移动已有 tag，
-        # 硬发会把这次构建的产物挂到一个源码对不上的 tag 上。
-        if: steps.ver.outputs.publish == 'true' && steps.ver.outputs.tag_elsewhere != 'true'
+        if: steps.ver.outputs.publish == 'true'
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
           # 显式钉在本次构建的提交上：不写的话，默认分支在构建期间前进了，
@@ -158,28 +221,26 @@ jobs:
           target_commitish: ${{ github.sha }}
           name: DesktopBackground ${{ steps.ver.outputs.version }}
           generate_release_notes: true
-          # 两个版本连着合并时，两个版本各自排队、可能并发构建。谁先构建完谁先发，
-          # 不显式指定的话"最后发布的"会变成 latest——旧版本后完成就会盖掉新的。
-          # 版本号排序更高的一律 latest，旧的只是普通 release。
           make_latest: ${{ steps.ver.outputs.is_latest }}
+          # 上次传到一半失败时会留下已上传的那个文件；覆盖掉才能补齐
+          overwrite_files: true
           files: |
-            dist/installer/*.exe
-            dist/DesktopBackground-portable-*.zip
+            dist/*.exe
+            dist/*.zip
 
       - name: 没发 Release，说明原因
-        # publish=true 但 tag 指向别处时也要进来报错
-        if: steps.ver.outputs.publish != 'true' || steps.ver.outputs.tag_elsewhere == 'true'
-        shell: pwsh
+        if: steps.ver.outputs.publish != 'true'
+        env:
+          ALREADY_PUBLISHED: ${{ steps.ver.outputs.already_published }}
+          TAG_ELSEWHERE: ${{ steps.ver.outputs.tag_elsewhere }}
+          TAG: ${{ steps.ver.outputs.tag }}
+          APP_VERSION: ${{ needs.meta.outputs.version }}
         run: |
-          if ("${{ github.ref }}" -ne "refs/heads/main") {
-            Write-Host "::notice::不是 main 上的构建，只打包验证，不发布 Release。"
-          } elseif ("${{ steps.ver.outputs.already_published }}" -eq "true") {
-            # 这个版本早发完了，之后 main 上的普通推送走到这里属正常情况，
-            # 此时 tag 指向旧提交也是对的
-            Write-Host "::notice::版本 ${{ needs.meta.outputs.version }} 已有完整 Release，安装包只作为 CI 产物上传。"
-            Write-Host "::notice::要发新版本，请先在 PR 里改 pyproject.toml 的 version 再合并。"
-          } else {
-            Write-Host "::error::tag ${{ steps.ver.outputs.tag }} 已存在且指向别的提交，产物与 tag 对应的源码不一致，拒绝发布。"
-            Write-Host "::error::请确认版本号是否写错，或手动处理已有 tag/Release 后重跑。"
+          if [ "$ALREADY_PUBLISHED" = true ]; then
+            echo "::notice::版本 $APP_VERSION 已有完整 Release，安装包只作为 CI 产物上传。"
+            echo "::notice::要发新版本，请先在 PR 里改 pyproject.toml 的 version 再合并。"
+          elif [ "$TAG_ELSEWHERE" = true ]; then
+            echo "::error::tag $TAG 已存在且指向别的提交，产物与 tag 对应的源码不一致，拒绝发布。"
+            echo "::error::请确认版本号是否写错，或手动处理已有 tag/Release 后重跑。"
             exit 1
-          }
+          fi

@@ -40,7 +40,8 @@ PyInstaller 把 `__file__` 统一解析到 `_internal/` 下，所以 `main.py` �
 的 dest 必须写 `"clock"` 和 `"."`。对不上就找不到素材。
 
 **运行时生成的图片不写回安装目录**：`result.png`、`weather.png` 等写到
-`%LOCALAPPDATA%\DesktopBackground\runtime\`（开发时仍写 `clock/`，方便看效果）。
+`%LOCALAPPDATA%\DesktopBackground\runtime\<安装路径哈希>\`（开发时仍写 `clock/`，方便看效果）。
+按安装路径分目录，是为了安装版与便携版同时运行时不会互相覆盖对方的图。卸载时会一并删除。
 这样程序目录可以只读——便携版解压进 Program Files 也能跑。
 
 ## 图标

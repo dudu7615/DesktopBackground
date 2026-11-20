@@ -24,7 +24,8 @@ ISCC.exe /DAppVersion=1.1.0 packaging\setup.iss              # → dist\installe
 ## 发布
 
 **合并进 `main` 后 GitHub Actions 会自动打包**，产物在 Actions 的 Artifacts 里；
-`pyproject.toml` 的 `version` 还没有同名 tag 时，顺带建一个 Release。
+该版本还没有 Release（或上次发布没传上产物）时，顺带建一个 Release。
+手动触发跑别的分支只打包、不发布。
 
 发版本的流程：在 PR 里改 `pyproject.toml` 的 `version` → 合并进 `main`。
 
@@ -33,5 +34,5 @@ ISCC.exe /DAppVersion=1.1.0 packaging\setup.iss              # → dist\installe
 - `DesktopBackground-Setup-<版本>.exe` —— 安装包
 - `DesktopBackground-portable-<版本>.zip` —— 免安装版，解压双击 `DesktopBackground.exe`
 
-安装包会装到 `%LOCALAPPDATA%\DesktopBackground`（程序要往 `clock/` 里写合成后的
-壁纸图，装进 Program Files 会因权限而失效），可选创建桌面快捷方式、开机启动。
+安装包会装到 `%LOCALAPPDATA%\DesktopBackground`，可选创建桌面快捷方式、开机启动。
+运行时生成的壁纸图写在同一处的 `runtime\` 目录，程序目录保持只读也能跑。

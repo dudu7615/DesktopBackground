@@ -5,8 +5,10 @@
 ; 产物在 dist\installer\DesktopBackground-Setup-<版本>.exe
 ;
 ; 安装范围只针对当前用户（PrivilegesRequired=lowest），不弹 UAC，装到
-; %LOCALAPPDATA% 下。这是刻意为之：程序运行时会往 clock/ 里写合成后的
-; result.png，装进 Program Files 反而会因为没有写权限而画不出壁纸。
+; %LOCALAPPDATA% 下。这是刻意为之：程序运行时会往用户数据目录
+; %LOCALAPPDATA%\DesktopBackground\runtime 里写合成后的图片——不写安装目录，
+; 是为了让程序目录保持只读也不影响运行（比方说便携版解压进了 Program Files）。
+; 安装目录放 %LOCALAPPDATA% 仍然合适：免 UAC、卸载干净。
 ;
 ; 注意：本文件里所有相对路径都相对**本文件所在目录**（packaging/）解析。
 ;
@@ -64,15 +66,27 @@ Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: 
 Name: "startupicon"; Description: "添加到开机启动"; GroupDescription: "快捷方式："; Flags: checkedonce
 
 [InstallDelete]
-; 覆盖升级时先清掉旧版本的 exe 与 _internal，避免残留旧 DLL。
-; V1.0.x 的产物叫 main.exe，一并删掉——否则升级后会留下两个 exe，
-; 开机启动项指的还是旧的那个。
+; 覆盖升级时清掉旧版留在安装根目录的文件。V1.0.x 的产物叫 main.exe，
+; 一并删掉——否则升级后会留下两个 exe，开机启动项指的还是旧的那个。
+;
+; 注意这里**不删 _internal**：用户的 clock/config.yml 就在
+; _internal\clock\ 下，整目录删掉会把自定义配置抹掉；而且先删后装，一旦
+; 安装中途失败，旧程序就只剩一个 exe、跑不起来了。_internal 里的旧文件
+; 靠 [Files] 的 ignoreversion 覆盖即可，残留的额外文件最多占点空间。
 Type: files; Name: "{app}\main.exe"
 Type: files; Name: "{app}\icon.ico"
-Type: filesandordirs; Name: "{app}\_internal"
 
 [Files]
-Source: "{#BuildDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; 结束进程用的小脚本（见下方 KillApp）。以 dontcopy 编进安装器本体，安装时
+; 解压到临时目录用。必须放在 [Files] 最前面：SolidCompression 下，取靠后的
+; 文件要先把前面的全部解压到内存，安装会卡一下。
+Source: "killapp.ps1"; Flags: dontcopy noencryption
+; 用户改过的 _internal\clock\config.yml 不能被新版本的默认配置覆盖，
+; 所以先把它从通配里排除，再用 onlyifdoesntexist 单独装：文件已存在就跳过。
+Source: "{#BuildDir}\*"; DestDir: "{app}"; Excludes: "_internal\clock\config.yml"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#BuildDir}\_internal\clock\config.yml"; DestDir: "{app}\_internal\clock"; Flags: onlyifdoesntexist
+; 再装一份到 {app}，卸载程序要按这个路径调用它
+Source: "killapp.ps1"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{userprograms}\{#AppName}\{#AppName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; IconFilename: "{app}\{#AppExeName}"
@@ -86,20 +100,36 @@ Name: "{userstartup}\{#AppName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "
 Filename: "{app}\{#AppExeName}"; Description: "立即运行 {#AppName}"; Flags: postinstall nowait skipifsilent unchecked
 
 [UninstallRun]
-Filename: "{sys}\taskkill.exe"; Parameters: "/f /im {#AppExeName}"; Flags: runhidden
+; 只杀本安装目录下的进程（见下方 KillApp 的说明），别顺手关掉别人的同名程序。
+; 顺带清掉旧版的 main.exe——从 V1.0.x 升级上来的机器上可能还开着它。
+; ps1 不能直接当可执行文件跑，显式经 powershell.exe 调用。
+Filename: "powershell.exe"; Parameters: "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{app}\killapp.ps1"" -ExePath ""{app}\{#AppExeName}"""; Flags: runhidden
+Filename: "powershell.exe"; Parameters: "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{app}\killapp.ps1"" -ExePath ""{app}\main.exe"""; Flags: runhidden
 
 [Code]
 { 这是无窗口的托盘程序，Inno 的 Restart Manager 认不出它，不主动杀进程就会
-  因为 exe 被占用而装不上。没在跑时 taskkill 返回非零，忽略即可。 }
-procedure KillRunningApp;
+  因为 exe 被占用而装不上。
+
+  不能用 taskkill /im：它按进程映像名匹配，机器上任何叫
+  DesktopBackground.exe / main.exe 的程序都会被一起强杀，可能丢掉别人没保存
+  的工作。killapp.ps1 按可执行文件的完整路径过滤，只结束本安装目录下的那个
+  进程；没在跑时什么也不做，返回码忽略。 }
+procedure KillApp(const ExePath: String);
 var
   ResultCode: Integer;
 begin
-  Exec(ExpandConstant('{sys}\taskkill.exe'), '/f /im {#AppExeName}', '',
-       SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  ExtractTemporaryFile('killapp.ps1');
+  Exec('powershell.exe',
+       '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' +
+       ExpandConstant('{tmp}\killapp.ps1') + '" -ExePath "' + ExePath + '"',
+       '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+end;
+
+procedure KillRunningApp;
+begin
+  KillApp(ExpandConstant('{app}\{#AppExeName}'));
   { 顺手清掉旧版进程名，覆盖升级时才不会留下正在运行的 main.exe }
-  Exec(ExpandConstant('{sys}\taskkill.exe'), '/f /im main.exe', '',
-       SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  KillApp(ExpandConstant('{app}\main.exe'));
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;

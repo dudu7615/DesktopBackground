@@ -57,22 +57,30 @@ def find_dlls() -> Path | None:
 # 显式带上 _ssl 与 OpenSSL。requests 访问天气接口必须走 HTTPS，缺了这些文件
 # PyInstaller 不会报错，只在用户机器上抛 ImportError——最难查的一类故障。
 # Python 3.14 (OpenSSL 3) 的文件名是 libcrypto-3-x64.dll / libssl-3-x64.dll。
+REQUIRED = ("_ssl.pyd", "libcrypto*.dll", "libssl*.dll")
 binaries = []
 _dlls = find_dlls()
 if _dlls:
     binaries = [
         (str(path), ".")
-        for pattern in ("_ssl.pyd", "libcrypto*.dll", "libssl*.dll")
+        for pattern in REQUIRED
         for path in sorted(_dlls.glob(pattern))
     ]
 
-# 打包机器是 Windows 却一个都没找到 —— 说明路径推断或文件命名变了。宁可在这里
-# 吵一句，也不要等用户机器上访问天气接口时才炸。
-if sys.platform == "win32" and not binaries:
-    print(
-        "[packaging/main.spec] 警告：没有找到 _ssl.pyd / libcrypto*.dll / libssl*.dll，"
-        f"已尝试的 DLLs 目录：{_dlls}。打包出的程序可能无法访问 HTTPS。"
-    )
+# 逐个 pattern 检查，而不是只看 binaries 是不是空：只匹配到其中一个也说明
+# 另外几个丢了，产物一样跑不了 HTTPS，但"非空"会把这种半残情况放过去。
+if sys.platform == "win32":
+    missing = [
+        pattern
+        for pattern in REQUIRED
+        if not _dlls or not list(_dlls.glob(pattern))
+    ]
+    if missing:
+        print(
+            "[packaging/main.spec] 警告：这些 HTTPS 依赖没找到："
+            f"{', '.join(missing)}（已尝试的 DLLs 目录：{_dlls}）。"
+            "打包出的程序可能无法访问 HTTPS。"
+        )
 
 a = Analysis(
     [str(ROOT / "main.py")],

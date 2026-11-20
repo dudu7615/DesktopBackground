@@ -12,8 +12,9 @@ ISCC.exe /DAppVersion=1.1.0 packaging\setup.iss                # → dist/instal
 只看效果、不需要安装包时，跑完第一条就能双击 `dist/DesktopBackground/DesktopBackground.exe`。
 
 `.github/workflows/release.yml` 走的就是这两步：合并进 `main` 后自动跑，
-产物传到 Actions Artifacts；`pyproject.toml` 的 `version` 是新的（还没有同名 tag）
-时顺带建一个 Release。所以发版本的流程是：**在 PR 里改 `version` → 合并**。
+产物传到 Actions Artifacts；该版本还没有 Release（或上次发到一半失败）时
+顺带建一个 Release。手动触发跑别的分支只打包、不发布。
+所以发版本的流程是：**在 PR 里改 `version` → 合并**。
 
 ## 产物
 
@@ -28,7 +29,7 @@ ISCC.exe /DAppVersion=1.1.0 packaging\setup.iss                # → dist/instal
 dist/DesktopBackground/
     DesktopBackground.exe
     _internal/
-        clock/         # 素材：config.yml、背景图、数字图；运行时也往这里写合成结果
+        clock/         # 素材：config.yml、背景图、数字图（只读，运行时只读不写）
         icon.ico       # 托盘图标
         base_library.zip / *.pyd ...
 ```
@@ -38,8 +39,9 @@ PyInstaller 把 `__file__` 统一解析到 `_internal/` 下，所以 `main.py` �
 `ROOT = Path(__file__).parent` 拿到的就是 `_internal/`，`clock/` 与 `icon.ico`
 的 dest 必须写 `"clock"` 和 `"."`。对不上就找不到素材。
 
-同理，程序运行时往 `clock/` 写 `result.png`，**安装目录必须可写**——这就是
-`setup.iss` 装到 `%LOCALAPPDATA%` 而不是 Program Files 的原因。
+**运行时生成的图片不写回安装目录**：`result.png`、`weather.png` 等写到
+`%LOCALAPPDATA%\DesktopBackground\runtime\`（开发时仍写 `clock/`，方便看效果）。
+这样程序目录可以只读——便携版解压进 Program Files 也能跑。
 
 ## 图标
 
@@ -50,12 +52,19 @@ PyInstaller 把 `__file__` 统一解析到 `_internal/` 下，所以 `main.py` �
 
 - `setup.iss` 里的 **`AppId`**：软件的唯一标识，改了等于换了另一个程序，
   老版本的覆盖安装和卸载都会错乱。
-- **exe 名 `DesktopBackground.exe`**：`setup.iss` 的 `[Files]`/`[Icons]`/`taskkill`
-  都按这个名字写；改名要同步改三处。
+- **exe 名 `DesktopBackground.exe`**：`setup.iss` 的 `[Files]`/`[Icons]` 与
+  `killapp.ps1` 的调用都按这个名字写；改名要同步改。
 - spec 里 `clock/` 与 `icon.ico` 的 **dest**：见上文。
+- `_internal\clock\config.yml` 在 `[Files]` 里被排除后单独 `onlyifdoesntexist`
+  安装：用户可能改过它，升级不能覆盖。
 
 ## 覆盖升级
 
 V1.0.x 的产物叫 `main.exe`，`setup.iss` 在 `[InstallDelete]` 里显式删掉它，
-`[Code]` 里的 `KillRunningApp` 也会先 `taskkill main.exe`，所以从旧版本升级
-不会留下两个 exe 或"文件被占用"装不上。
+`[Code]` 里的 `KillRunningApp` 也会先结束它，所以从旧版本升级不会留下
+两个 exe 或"文件被占用"装不上。
+
+结束进程走 `packaging/killapp.ps1`（按 exe 完整路径匹配），**不是**
+`taskkill /im`——后者按映像名匹配，会把机器上任何同名程序一起强杀。
+`[InstallDelete]` 也不删整个 `_internal`：那会连带删掉用户改过的
+`config.yml`，且安装中途失败时旧程序会残缺。旧文件靠 `ignoreversion` 覆盖。

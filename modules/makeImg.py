@@ -29,6 +29,15 @@ def _fontFile(assets: Path, name: str) -> str:
     return str(local) if local.exists() else name
 
 
+#: 由程序在运行时绘制、只存在于输出目录的图层。数字图（month/day/hour…）
+#: 和背景是打包时自带的素材，不在此列。
+GENERATED_LAYERS = frozenset({"weather.png", "exam.png"})
+
+
+def _isGenerated(name: str) -> bool:
+    return Path(name).name in GENERATED_LAYERS
+
+
 def weatherImg(
     assets: Path,
     out: Path,
@@ -72,8 +81,11 @@ def BgImg(
 ):
     """合成背景图片保存到 out/result.png
 
-    背景是自带素材（读 assets），其余图层可能是运行时生成的（weather.png，读
-    out），也可能是自带的数字图。每个图层先找 out 再找 assets。
+    背景与数字图从 assets 读，运行时生成的图层（weather.png、exam.png）从
+    out 读。每个图层先找 out 再找 assets。
+
+    运行时生成的文件**不能**回退到 assets：从 V1.0.x 升级上来的安装目录里
+    还留着旧版本写在 clock/ 下的 weather.png，回退过去会把过期的天气叠上去。
     """
 
     def resolve(name: str) -> Path | None:
@@ -86,12 +98,17 @@ def BgImg(
     logger.debug("开始合成背景图片")
     img = Image.open(assets / background).convert("RGBA")
     for imgPath in layers:
-        # 开机第一次合成时天气模块可能还没写出 weather.png，少一层就少一层，
-        # 不能让整次合成都失败——那样壁纸就再也不会更新了
-        path = resolve(imgPath)
-        if path is None:
+        resolved: Path | None
+        if _isGenerated(imgPath):
+            # 运行时生成的文件只认 out：开机第一次合成时天气模块可能还没写出
+            # weather.png，少一层就少一层，不能让整次合成都失败
+            candidate = out / imgPath
+            resolved = candidate if candidate.exists() else None
+        else:
+            resolved = resolve(imgPath)
+        if resolved is None:
             logger.warning(f"缺少图层 {imgPath}，本次跳过")
             continue
-        img.alpha_composite(Image.open(path).convert("RGBA"))
+        img.alpha_composite(Image.open(resolved).convert("RGBA"))
     _saveAtomic(img, out / "result.png")
     logger.debug("合成背景图片成功")

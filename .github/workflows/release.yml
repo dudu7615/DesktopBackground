@@ -142,13 +142,21 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           python3 - <<'PY'
-          import os, subprocess
+          import os, re, subprocess
 
           version = os.environ["APP_VERSION"]
           build_sha = os.environ["BUILD_SHA"]
           tag = f"v{version}"
           exe = f"DesktopBackground-Setup-{version}.exe"
           zip_name = f"DesktopBackground-portable-{version}.zip"
+          # PEP 440 的预发布：1.2.0rc1 / 1.2.0b2 / 1.2.0a1 / 1.2.0.dev1。
+          # 认不出的写法按正式版处理（宁可让它参与 latest，也别把正式版误标）。
+          _pre = re.match(
+              r"^\d+(?:\.\d+)*\.?(?:a|b|rc|alpha|beta|pre|preview|dev)\d*",
+              version.split("+")[0],
+              re.IGNORECASE,
+          )
+          is_prerelease = bool(_pre)
 
           def run(*args, check=True):
               return subprocess.run(args, capture_output=True, text=True, check=check)
@@ -177,11 +185,12 @@ jobs:
                   "publish": str(publish).lower(),
                   "tag_elsewhere": str(tag_elsewhere).lower(),
                   "already_published": str(published).lower(),
+                  "is_prerelease": str(is_prerelease).lower(),
               }.items():
                   f.write(f"{k}={v}\n")
           print(
               f"版本 {version}，tag {tag}，已完整发布：{published}，"
-              f"tag 指向别处：{tag_elsewhere}，本次发布：{publish}"
+              f"tag 指向别处：{tag_elsewhere}，本次发布：{publish}，预发布：{is_prerelease}"
           )
           PY
 
@@ -194,6 +203,9 @@ jobs:
           target_commitish: ${{ github.sha }}
           name: DesktopBackground ${{ steps.ver.outputs.version }}
           generate_release_notes: true
+          # 预发布版本（rc1、b1…）要标出来：GitHub 不会把 prerelease 设为
+          # latest，下面的校正步骤也会跳过它
+          prerelease: ${{ steps.ver.outputs.is_prerelease }}
           # 不传 make_latest：GitHub 默认把最新发布的设为 latest，两个版本并发时
           # 顺序不定。先后统一由下面的"校正 latest 指针"步骤按版本号重新指定。
           overwrite_files: true
@@ -201,37 +213,64 @@ jobs:
             dist/installer/*.exe
             dist/*.zip
 
+      # 安装和 import 第三方包时不带 GH_TOKEN：万一依赖源被投毒，拿不到写权限。
+      # 这里先把它装到工作目录下的 .deps，下一步只读使用。
+      - name: 准备版本比较库
+        if: >-
+          steps.ver.outputs.publish == 'true' ||
+          steps.ver.outputs.already_published == 'true'
+        run: python3 -m pip install --quiet --target .deps packaging
+
       - name: 校正 latest 指针
-        # 两个版本并发发布时，谁最后发谁会把 latest 抢过来。发布完按现有 Release
-        # 里最高的非预发布版本重新指定一次，结果与发布顺序无关。
-        if: steps.ver.outputs.publish == 'true'
+        # 两个版本并发发布时，谁最后发谁会把 latest 抢过来。这里只跟"当前
+        # latest"比较：本次版本更高才提升。无论两个 run 谁先谁后，最终 latest
+        # 都会是较高的那个，不依赖列表顺序，也不需要全局串行。
+        # 重试时（publish 为 false 但已发布）也要跑：上次可能正卡在这一步。
+        if: >-
+          steps.ver.outputs.publish == 'true' ||
+          steps.ver.outputs.already_published == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          APP_VERSION: ${{ needs.meta.outputs.version }}
+          IS_PRERELEASE: ${{ steps.ver.outputs.is_prerelease }}
+          PYTHONPATH: ${{ github.workspace }}/.deps
         run: |
-          # 版本先后按 PEP 440 比较，交给 packaging，不自己写解析
-          python3 -m pip install --quiet packaging
           python3 - <<'PY'
-          import json, subprocess, sys
+          import json, os, subprocess, sys
 
           from packaging.version import InvalidVersion, Version
 
-          out = subprocess.run(
-              ["gh", "release", "list", "--limit", "100", "--json", "tagName,isPrerelease"],
-              capture_output=True, text=True, check=True,
-          ).stdout
-          candidates = {}
-          for r in json.loads(out):
-              if r["isPrerelease"]:
-                  continue
-              try:
-                  candidates[r["tagName"]] = Version(r["tagName"].lstrip("v"))
-              except InvalidVersion:
-                  continue
-          if not candidates:
+          version = os.environ["APP_VERSION"]
+          try:
+              current = Version(version)
+          except InvalidVersion:
+              print(f"::warning::版本号 {version} 不是合法 PEP 440，跳过 latest 校正")
               sys.exit(0)
-          best = max(candidates, key=lambda t: candidates[t])
-          print(f"最高版本 Release：{best}")
-          subprocess.run(["gh", "release", "edit", best, "--latest"], check=True)
+
+          # 预发布 Release 不能被设为 latest（GitHub 不允许），提前跳过
+          if os.environ.get("IS_PRERELEASE") == "true":
+              print(f"{version} 是预发布版本，不设为 latest")
+              sys.exit(0)
+
+          # 仓库当前标记为 latest 的 Release；还没有 Release 时 gh 会返回非零
+          res = subprocess.run(
+              ["gh", "api", "repos/{owner}/{repo}/releases/latest"],
+              capture_output=True, text=True,
+          )
+          if res.returncode == 0:
+              latest_tag = json.loads(res.stdout).get("tag_name", "")
+              try:
+                  latest = Version(latest_tag.lstrip("v"))
+              except InvalidVersion:
+                  latest = None
+              if latest is not None and latest >= current:
+                  print(f"当前 latest 是 {latest_tag}，不低于 {version}，无需调整")
+                  sys.exit(0)
+          else:
+              print("仓库还没有 latest Release，直接标记")
+
+          subprocess.run(["gh", "release", "edit", f"v{version}", "--latest"], check=True)
+          print(f"已把 v{version} 标记为 latest")
           PY
 
       - name: 没发 Release，说明原因

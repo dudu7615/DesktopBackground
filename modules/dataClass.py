@@ -1,7 +1,8 @@
 from pydantic import (
     BaseModel,
-    field_validator,
     field_serializer,
+    field_validator,
+    model_validator,
 )
 
 
@@ -15,6 +16,7 @@ class Config(BaseModel):
     size: tuple[int, int]
     font: Font
     color: tuple[int, int, int]
+    #: 至少要有 weather 和 exam 两项，见下面的校验
     place: dict[str, tuple[int, int]]
 
     @field_validator("font", mode="before")
@@ -25,6 +27,15 @@ class Config(BaseModel):
         if isinstance(v, (list, tuple)) and len(v) == 2:
             return {"name": v[0], "size": v[1]}
         return v
+
+    @model_validator(mode="after")
+    def _checkPlace(self) -> "Config":
+        # 缺 key 的话运行时才会在 config.place["exam"] 处抛 KeyError，那时
+        # 对应任务静默停止、只留一张不更新的壁纸。在启动时就说清楚缺什么。
+        missing = [k for k in ("weather", "exam") if k not in self.place]
+        if missing:
+            raise ValueError(f"place 缺少必要项：{', '.join(missing)}")
+        return self
 
     @field_serializer("font")
     def _font2dict(self, v: Font) -> dict[str, str | int]:

@@ -13,8 +13,6 @@ import sys
 from pathlib import Path
 
 APP_DIR_NAME = "DesktopBackground"
-#: 子目录名保留的字符数。Windows 路径本身不会这么长，这里只是兜底。
-_KEY_LEN = 80
 
 
 def _root() -> Path:
@@ -28,14 +26,26 @@ def _root() -> Path:
 def instanceKey() -> str:
     """由 exe 所在目录推出实例名，安装版与便携版各得一个。
 
-    规则：转小写，非 ASCII 字母数字的字符一律换成 `_`，取末 80 个字符。
-    刻意不用哈希——setup.iss 里要用 Pascal Script 算出同样的值，编码相关的
-    哈希在两边很难保证一致（用户名可能是中文等非 ASCII 字符）。
+    组成：8 位十六进制的 djb2 校验和 + `_` + 可读路径片段（转小写、非 ASCII
+    字母数字换成 `_`、取末 72 个字符）。校验和负责区分只看片段会撞车的路径，
+    片段负责让人一眼看出是哪个安装。
+
+    刻意不用 SHA-1：setup.iss 里要用 Pascal Script 算出同样的值，
+    GetSHA1OfString 的编码行为无法保证与 Python 一致（用户名可能是中文）。
+    这里只用字符码点做整数运算，两边逐字符完全等价。
     **改这里的话 packaging/setup.iss 的 InstanceKey 必须同步改。**
     """
     appDir = Path(sys.executable).parent.as_posix().lower()
-    key = "".join(c if ("a" <= c <= "z" or "0" <= c <= "9") else "_" for c in appDir)
-    return key[-_KEY_LEN:] or "_"
+
+    # djb2：h = h * 33 + ord(c)，按 32 位无符号回绕
+    h = 5381
+    for ch in appDir:
+        h = (h * 33 + ord(ch)) & 0xFFFFFFFF
+
+    readable = "".join(
+        c if ("a" <= c <= "z" or "0" <= c <= "9") else "_" for c in appDir
+    )[-72:]
+    return f"{h:08x}_{readable}"
 
 
 def runtimeDir() -> Path:

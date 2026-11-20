@@ -91,7 +91,7 @@ Source: "killapp.ps1"; Flags: dontcopy noencryption
 ; 所以先把它从通配里排除，再用 onlyifdoesntexist 单独装：文件已存在就跳过。
 Source: "{#BuildDir}\*"; DestDir: "{app}"; Excludes: "_internal\clock\config.yml"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#BuildDir}\_internal\clock\config.yml"; DestDir: "{app}\_internal\clock"; Flags: onlyifdoesntexist
-; 再装一份到 {app}，卸载程序要按这个路径调用它
+; 再装一份到 {app}，卸载器要用它结束本程序的进程（见 CurUninstallStepChanged）
 Source: "killapp.ps1"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
@@ -104,18 +104,6 @@ Name: "{userstartup}\{#AppName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "
 
 [Run]
 Filename: "{app}\{#AppExeName}"; Description: "立即运行 {#AppName}"; Flags: postinstall nowait skipifsilent unchecked
-
-[UninstallRun]
-; 只杀本安装目录下的进程（见下方 KillApp 的说明），别顺手关掉别人的同名程序。
-; 顺带清掉旧版的 main.exe——从 V1.0.x 升级上来的机器上可能还开着它。
-; ps1 不能直接当可执行文件跑，显式经 powershell.exe 调用。
-;
-; 这里没有可用的 [Code] 事件（编译进卸载程序的是 [Code] 里的代码，但事件
-; 函数名与安装器不同），所以直接调 {app}\killapp.ps1。之所以敢这么写，是因为
-; PrivilegesRequired=lowest 且不允许提升权限，卸载器始终以当前用户运行，
-; 替换这个脚本拿不到任何额外权限。
-Filename: "powershell.exe"; Parameters: "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{app}\killapp.ps1"" -ExePath ""{app}\{#AppExeName}"""; Flags: runhidden
-Filename: "powershell.exe"; Parameters: "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{app}\killapp.ps1"" -ExePath ""{app}\main.exe"""; Flags: runhidden
 
 [UninstallDelete]
 ; 运行时生成的图片与日志由主程序写在 %LOCALAPPDATA%\DesktopBackground\ 下，
@@ -169,31 +157,68 @@ begin
   Result := '';
 end;
 
-{ 与 modules/paths.py 的 instanceKey() 保持一致：{app} 转小写、非 ASCII
-  字母数字一律换成下划线、取末 80 个字符。两边算法不同步的话，卸载就清不到
-  自己的运行期数据（或者误删便携版的数据）。 }
+{ 与 modules/paths.py 的 instanceKey() 完全一致：
+  djb2 校验和（h = h*33 + 码点，按 32 位回绕）取 8 位十六进制，接 `_`，
+  再接 {app} 转小写、非 ASCII 字母数字换成下划线、取末 72 个字符。
+  两边算法不同步的话，卸载就清不到自己的运行期数据（或误删便携版的数据）。 }
 function InstanceKey(Param: String): String;
 var
-  S: String;
-  I: Int64;
-  C: Char;
+  S, Readable: String;
+  I: Integer;
+  H: Int64;
 begin
   S := Lowercase(ExpandConstant('{app}'));
+
+  { 用 Int64 再取低 32 位：Cardinal 上 H*33 会先溢出报错 }
+  H := 5381;
+  for I := 1 to Length(S) do
+    H := (H * 33 + Ord(S[I])) and $FFFFFFFF;
+
+  Readable := '';
   for I := 1 to Length(S) do
   begin
-    C := S[I];
-    if not (((C >= 'a') and (C <= 'z')) or ((C >= '0') and (C <= '9'))) then
-      S[I] := '_';
+    if ((S[I] >= 'a') and (S[I] <= 'z')) or ((S[I] >= '0') and (S[I] <= '9')) then
+      Readable := Readable + S[I]
+    else
+      Readable := Readable + '_';
   end;
-  if Length(S) > 80 then
-    S := Copy(S, Length(S) - 80 + 1, 80);
-  if Length(S) = 0 then
-    S := '_';
-  Result := S;
+  if Length(Readable) > 72 then
+    Readable := Copy(Readable, Length(Readable) - 72 + 1, 72);
+
+  Result := Lowercase(IntToHex(H, 8)) + '_' + Readable;
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
     RemoveOldLauncher;
+end;
+
+{ 卸载时结束本程序的进程。走 CurUninstallStepChanged 而不是 [UninstallRun]：
+  [UninstallRun] 没法按条件跳过，而这里必须能判断"当前是否提权"。
+
+  killapp.ps1 装在 {app} 下，用户可写。正常情况下卸载器以当前用户运行，替换
+  它没有任何收益；但如果用户手动右键"以管理员身份运行"卸载器，执行用户可写
+  的脚本就成了提权执行点，所以提权时直接跳过——文件被占用时 Inno 会提示重启。 }
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  ResultCode: Integer;
+  Script: String;
+begin
+  if CurUninstallStep <> usUninstall then
+    Exit;
+  if IsAdmin then
+    Exit;
+  Script := ExpandConstant('{app}\killapp.ps1');
+  if not FileExists(Script) then
+    Exit;
+  Exec('powershell.exe',
+       '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + Script +
+       '" -ExePath "' + ExpandConstant('{app}\{#AppExeName}') + '"',
+       '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  { 顺带清掉旧版的 main.exe——从 V1.0.x 升级上来的机器上可能还开着它 }
+  Exec('powershell.exe',
+       '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + Script +
+       '" -ExePath "' + ExpandConstant('{app}\main.exe') + '"',
+       '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;

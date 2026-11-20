@@ -24,9 +24,10 @@ packaging/setup.iss 封成安装包。
 main.py 与 modules/ 是纯 Python，会被打进 PYZ 归档、不落成目录；但 PyInstaller
 把 ``__file__`` 统一解析到 _internal/ 下，所以 main.py 里
 ``ROOT = Path(__file__).parent`` 拿到的就是 _internal/。因此 clock/ 与 icon.ico
-的 dest 必须写 "clock" 和 "."。运行时程序会往 clock/ 里写 result.png、
-exam.png、weather.png，因此安装位置必须在用户可写目录（见 setup.iss 的
-DefaultDirName=%LOCALAPPDATA%）。
+的 dest 必须写 "clock" 和 "."。
+
+clock/ 是只读素材；运行时生成的图片写在 %LOCALAPPDATA% 下（见 main.py 与
+modules/paths.py），所以程序目录可以只读，便携版解压进 Program Files 也能跑。
 
 本文件扩展名是 .spec，不在 ruff 的检查范围内；SPECPATH 由 PyInstaller 注入。
 """
@@ -69,17 +70,16 @@ if _dlls:
 
 # 逐个 pattern 检查，而不是只看 binaries 是不是空：只匹配到其中一个也说明
 # 另外几个丢了，产物一样跑不了 HTTPS，但"非空"会把这种半残情况放过去。
+# 这里直接让构建失败：发布出去的安装包如果取不到天气，用户得重新下整个版本。
 if sys.platform == "win32":
     missing = [
-        pattern
-        for pattern in REQUIRED
-        if not _dlls or not list(_dlls.glob(pattern))
+        pattern for pattern in REQUIRED if not _dlls or not list(_dlls.glob(pattern))
     ]
     if missing:
-        print(
-            "[packaging/main.spec] 警告：这些 HTTPS 依赖没找到："
+        raise SystemExit(
+            "[packaging/main.spec] 缺少 HTTPS 依赖："
             f"{', '.join(missing)}（已尝试的 DLLs 目录：{_dlls}）。"
-            "打包出的程序可能无法访问 HTTPS。"
+            "打包出的程序无法访问天气接口，已中止构建。"
         )
 
 a = Analysis(

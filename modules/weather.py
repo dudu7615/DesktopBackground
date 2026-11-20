@@ -30,6 +30,10 @@ def getweather():
     if not page:
         return "获取天气失败"
     html = etree.HTML(page, etree.HTMLParser())
+    if html is None:
+        # 页面解析不出文档（比如返回的是空壳/二进制内容）
+        logger.warning("天气页面无法解析")
+        return "获取天气失败"
     # 网页改版或返回错误页时 xpath 取不到，别让整个循环崩掉
     weather = html.xpath("/html/body/div[6]/div[4]/div[1]/div[1]/div/h3/text()")
     low = html.xpath("/html/body/div[6]/div[4]/div[1]/div[1]/div/p/span[1]/text()")

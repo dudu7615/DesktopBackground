@@ -28,6 +28,9 @@ jobs:
           repository: ${{ github.event.pull_request.head.repo.full_name }}
           ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
+          # 这个 job 会 pip install black（第三方包），不能让它顺手拿到
+          # .git/config 里那份可写 token。提交那一步会显式取 token。
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
@@ -42,6 +45,16 @@ jobs:
 
       - name: Run black format
         run: black .
+
+      # git-auto-commit-action 靠 checkout 留在 .git/config 里的凭据推送。
+      # 上面跑的是第三方包（black），所以 checkout 时先不持久化凭据，等
+      # 格式化做完、只差推送这一步时再补上——推送本身不执行任何第三方代码。
+      - name: 配置推送凭据
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
 
       - name: Commit changes
         uses: stefanzweifel/git-auto-commit-action@b863ae1933cb653a53c021fe36dbb774e1fb9403 # v5

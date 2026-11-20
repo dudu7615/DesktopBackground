@@ -1,5 +1,6 @@
 from pydantic import (
     BaseModel,
+    Field,
     field_serializer,
     field_validator,
     model_validator,
@@ -8,7 +9,8 @@ from pydantic import (
 
 class Font(BaseModel):
     name: str
-    size: int
+    # 0 或负数字号会让 ImageFont.truetype 直接抛异常，对应任务就静默停了
+    size: int = Field(gt=0, description="字号，必须大于 0")
 
 
 class Config(BaseModel):

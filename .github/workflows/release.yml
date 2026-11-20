@@ -75,9 +75,9 @@ jobs:
       - name: PyInstaller 打包
         run: uv run pyinstaller packaging/main.spec --noconfirm --clean
 
-      - name: 装 Inno Setup
-        # 钉版本：新的 Inno 大版本偶尔会改向导/编译器行为
-        run: choco install innosetup --version=6.5.4 --no-progress -y
+      # 不自带 choco 钉版本：windows-latest 镜像已预装 Inno Setup（目前 6.7.1）。
+      # 之前 `choco install --version=6.5.4` 会因"已装更新版本"直接失败，
+      # 整条流水线就卡在这。脚本在 6.5.4 / 6.7.1 下都验证过能编译。
 
       - name: 生成安装包
         shell: pwsh
@@ -85,11 +85,28 @@ jobs:
           # 版本号来自分支里的 pyproject.toml，不能拼进脚本源码
           APP_VERSION: ${{ needs.meta.outputs.version }}
         run: |
-          # choco 装的是 6 还是 7 不确定，直接找 ISCC.exe，别写死路径
-          $iscc = Get-ChildItem "C:\Program Files (x86)\Inno Setup*\ISCC.exe",
-                                 "C:\Program Files\Inno Setup*\ISCC.exe" |
-                  Select-Object -First 1 -ExpandProperty FullName
+          $patterns = @(
+            "C:\Program Files (x86)\Inno Setup*\ISCC.exe",
+            "C:\Program Files\Inno Setup*\ISCC.exe"
+          )
+          function Find-Iscc {
+            Get-ChildItem $patterns -ErrorAction SilentlyContinue |
+              Select-Object -First 1 -ExpandProperty FullName
+          }
+
+          # 镜像里装在哪、哪个大版本都可能变，按通配找
+          $iscc = Find-Iscc
+          if (-not $iscc) {
+            # 镜像没预装时兜底装一个；不钉版本，免得和已装的版本冲突。
+            # choco 在"已装更新版本"时会返回非零，这里不能让它中断脚本，
+            # 装完再找一次，找得到就行。
+            Write-Host "没找到 ISCC.exe，尝试安装 Inno Setup"
+            choco install innosetup --no-progress -y
+            $iscc = Find-Iscc
+          }
           if (-not $iscc) { throw "找不到 ISCC.exe" }
+
+          Write-Host "使用 $iscc"
           & $iscc "/DAppVersion=$env:APP_VERSION" packaging\setup.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC 失败" }
 

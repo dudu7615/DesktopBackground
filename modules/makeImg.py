@@ -65,11 +65,14 @@ def examDaysImg(
     size: tuple[int, int],
     place: tuple[float, float],
     days: str,
-    font: tuple[str, int],
+    font: Font,
     fill: tuple[int, int, int],
 ):
-    """高考剩余时间，保存到 out/exam.png"""
-    textFont = ImageFont.truetype(_fontFile(assets, font[0]), font[1])
+    """高考剩余时间，保存到 out/exam.png
+
+    字体参数与 weatherImg 保持一致（都收 Font），调用方直接传 config.font 即可。
+    """
+    textFont = ImageFont.truetype(font=_fontFile(assets, font.name), size=font.size)
     img = Image.new("RGBA", size, (0, 0, 0, 0))
     ImageDraw.Draw(img).text(place, f"高考剩余{days}天", font=textFont, fill=fill)
     _saveAtomic(img, out / "exam.png")

@@ -5,11 +5,12 @@ import anyio
 import yaml
 from datetime import datetime
 from threading import Thread
+from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
 from PySide6.QtGui import QIcon, QAction
 from modules import makeImg, setBg, weather, logger, Config
 from modules.log import setupLogging
-from modules.paths import runtimeDir
+from modules.paths import instanceKey, runtimeDir
 
 ROOT = Path(__file__).parent
 IMGS_PATH = ROOT / "clock"
@@ -29,12 +30,11 @@ def _outputPath() -> Path:
 
 
 OUT_PATH = _outputPath()
-if not getattr(sys, "frozen", False):
-    # runtimeDir() 自己会建目录并写好归属标记；开发时用的 clock/ 本来就在
-    OUT_PATH.mkdir(parents=True, exist_ok=True)
 
 # 先接上文件日志再读配置：配置校验失败会让 windowed exe 直接退出，没有日志
 # 就什么线索都留不下。
+# 注意先于一切建目录/读配置：打包后 runtimeDir() 会顺带写好归属标记，
+# 卸载器靠它认领数据目录。
 setupLogging()
 
 try:
@@ -87,7 +87,7 @@ async def exam():
             config.size,
             config.place["exam"],
             str((examDate - datetime.now()).days),
-            (config.font.name, config.font.size),
+            config.font,
             config.color,
         )
         await anyio.sleep(60)
@@ -129,6 +129,37 @@ class TrayIcon(QSystemTrayIcon):
         app.quit()
 
 
+def _claimSingleInstance() -> QLocalServer | None:
+    """同一安装只允许跑一份；已经有实例在跑时返回 None。
+
+    开机自启 + 手动双击是最常见的重复启动场景，两个进程会抢同一个运行目录
+    里的图、把同一个日志文件切来切去。
+
+    用本地套接字而不是共享内存：后者在进程被强杀（任务管理器结束任务、崩溃）
+    后标记仍留在系统里，下次启动会误判"已在运行"而永远起不来。套接字随进程
+    消失，残留的也只是个连不上的文件，这里会顺手清掉。
+
+    便携版是另一个安装目录、另一个套接字名，不受影响。
+    """
+    name = f"DesktopBackground-{instanceKey()}"
+    probe = QLocalSocket()
+    probe.connectToServer(name)
+    if probe.waitForConnected(300):
+        # 真有一个活着的实例在监听
+        probe.disconnectFromServer()
+        return None
+    probe.abort()
+
+    # 连不上：要么没人跑，要么上次是被强杀留下的残骸。removeServer 只删除
+    # 套接字文件，安全。
+    QLocalServer.removeServer(name)
+    server = QLocalServer()
+    if not server.listen(name):
+        logger.warning(f"无法创建单实例监听：{server.errorString()}")
+        return server  # 监听失败也不该阻止程序启动
+    return server
+
+
 async def main():
     async with anyio.create_task_group() as taskGroup:
         taskGroup.start_soon(weater)
@@ -137,9 +168,16 @@ async def main():
 
 
 if __name__ == "__main__":
+    app = QApplication(sys.argv)
+
+    # 同一个安装只允许跑一份（见 _claimSingleInstance）
+    _instance = _claimSingleInstance()
+    if _instance is None:
+        logger.info("已有实例在运行，本次启动退出")
+        sys.exit(0)
+
     logger.info("程序启动")
     Thread(target=anyio.run, args=(main,), daemon=True).start()
-    app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
     tray = TrayIcon()
     tray.show()

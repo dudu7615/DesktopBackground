@@ -230,7 +230,7 @@ class ImgThread(Thread):
             tuple(self.config["size"]),
             tuple(self.config["place"]["exam"]),
             str((datetime(year=2024, month=6, day=16) - datetime.today()).days),  # 中考剩余天数
-            tuple(self.config["font"]),
+            config.font,   # 与 weatherImg 一样直接收 Font 模型
             tuple(self.config["color"]),
         )
 

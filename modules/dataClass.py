@@ -8,6 +8,14 @@ from pydantic import (
 
 
 class Font(BaseModel):
+    """字体配置。
+
+    原来是 dataclass，现在改成 pydantic 模型：构造时只接受关键字参数，
+    ``Font("msyh.ttc", 60)`` 会报 TypeError。这是升级到 1.1.0 时的一处不兼容
+    变更——本仓库内的调用方已全部改用配置文件 + model_validate，外部若还有按
+    位置构造的用法，改成 ``Font(name=..., size=...)``。
+    """
+
     name: str
     # 0 或负数字号会让 ImageFont.truetype 直接抛异常，对应任务就静默停了
     size: int = Field(gt=0, description="字号，必须大于 0")

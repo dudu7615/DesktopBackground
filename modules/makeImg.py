@@ -1,10 +1,7 @@
 from PIL import Image, ImageDraw, ImageFont
 from .log import logger
+from .dataClass import Font
 from pathlib import Path
-from modules import Font
-
-ROOT = Path(__file__).parent.parent
-IMGS_PATH = ROOT / "clock"
 
 
 def _fontFile(assets: Path, name: str) -> str:

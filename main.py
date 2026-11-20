@@ -31,10 +31,18 @@ def _outputPath() -> Path:
 OUT_PATH = _outputPath()
 OUT_PATH.mkdir(parents=True, exist_ok=True)
 
-_config = yaml.load(
-    (IMGS_PATH / "config.yml").read_text(encoding="utf-8"), Loader=yaml.FullLoader
-)
-config = Config.model_validate(_config)
+# 先接上文件日志再读配置：配置校验失败会让 windowed exe 直接退出，没有日志
+# 就什么线索都留不下。
+setupLogging()
+
+try:
+    _config = yaml.load(
+        (IMGS_PATH / "config.yml").read_text(encoding="utf-8"), Loader=yaml.FullLoader
+    )
+    config = Config.model_validate(_config)
+except Exception:
+    logger.exception("读取配置失败：clock/config.yml 格式不对")
+    raise
 
 
 @logger.catch
@@ -127,7 +135,6 @@ async def main():
 
 
 if __name__ == "__main__":
-    setupLogging()
     logger.info("程序启动")
     Thread(target=anyio.run, args=(main,), daemon=True).start()
     app = QApplication(sys.argv)

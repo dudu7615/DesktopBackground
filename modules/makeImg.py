@@ -2,6 +2,25 @@ from PIL import Image, ImageDraw, ImageFont
 from .log import logger
 from .dataClass import Font
 from pathlib import Path
+import os
+import tempfile
+
+
+def _saveAtomic(img: Image.Image, path: Path) -> None:
+    """先写临时文件再原子替换。
+
+    同一个用户的安装版与便携版可能同时开着，两边共用同一个 runtime 目录；
+    直接覆盖会让另一边读到写了一半的文件。rename 是原子的，读到的永远是
+    完整的旧图或完整的新图。
+    """
+    fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=path.suffix)
+    os.close(fd)
+    try:
+        img.save(tmp)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
 
 
 def _fontFile(assets: Path, name: str) -> str:
@@ -27,7 +46,7 @@ def weatherImg(
     textFont = ImageFont.truetype(font=_fontFile(assets, font.name), size=font.size)
     img = Image.new("RGBA", size, (0, 0, 0, 0))
     ImageDraw.Draw(img).text(place, weather, font=textFont, fill=fill)
-    img.save(out / "weather.png")
+    _saveAtomic(img, out / "weather.png")
     logger.debug("绘制天气图片成功")
 
 
@@ -44,7 +63,7 @@ def examDaysImg(
     textFont = ImageFont.truetype(_fontFile(assets, font[0]), font[1])
     img = Image.new("RGBA", size, (0, 0, 0, 0))
     ImageDraw.Draw(img).text(place, f"高考剩余{days}天", font=textFont, fill=fill)
-    img.save(out / "exam.png")
+    _saveAtomic(img, out / "exam.png")
     logger.debug("绘制高考时间图片成功")
 
 
@@ -74,5 +93,5 @@ def BgImg(
             logger.warning(f"缺少图层 {imgPath}，本次跳过")
             continue
         img.alpha_composite(Image.open(path).convert("RGBA"))
-    img.save(out / "result.png")
+    _saveAtomic(img, out / "result.png")
     logger.debug("合成背景图片成功")

@@ -26,9 +26,10 @@ def getweather():
     logger.debug(f"天气：{weather}，温度：{temperature}")
     return (
         f"{weather}  {temperature}"
-        if weather and temperature != "~ ℃" # 判断是否获取到天气
+        if weather and temperature != "~ ℃"  # 判断是否获取到天气
         else "获取天气失败"
     )
+
 
 @logger.catch
 def test():

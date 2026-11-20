@@ -8,7 +8,6 @@ from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
 from PySide6.QtGui import QIcon, QAction
 from modules import makeImg, setBg, weather, logger, Config
 
-
 ROOT = Path(__file__).parent
 IMGS_PATH = ROOT / "clock"
 
@@ -45,6 +44,7 @@ async def img():
         if i:
             i = False
         await anyio.sleep(10)
+
 
 @logger.catch
 async def exam():
@@ -96,11 +96,13 @@ class TrayIcon(QSystemTrayIcon):
         """点击托盘菜单时触发"""
         app.quit()
 
+
 async def main():
     async with anyio.create_task_group() as taskGroup:
         taskGroup.start_soon(weater)
         taskGroup.start_soon(exam)
         taskGroup.start_soon(img)
+
 
 if __name__ == "__main__":
     logger.info("程序启动")

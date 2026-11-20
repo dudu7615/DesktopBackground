@@ -19,6 +19,10 @@
 ; 不传则用下面的默认值。
 
 #define AppName "DesktopBackground"
+; 用户能看到的名字：所有快捷方式、启动项、安装/卸载界面都用它。
+; 与 AppName 分开是因为 AppName 还决定安装目录和数据目录，改了会让老版本
+; 升级断链（见上方 AppId 的说明）。
+#define AppDisplayName "时钟壁纸"
 #define AppExeName "DesktopBackground.exe"
 
 #ifndef AppVersion
@@ -33,13 +37,13 @@
 ; 程序，覆盖安装与卸载都会错乱。这里的值沿用旧版安装包（当时 MyAppName
 ; 为 DesktopBackground），所以从 V1.0.x 升级上来仍然是同一个程序。
 AppId={{24d4202b-ba13-4415-a5cc-2e277060c47c}}
-AppName={#AppName}
+AppName={#AppDisplayName}
 AppVersion={#AppVersion}
-AppVerName={#AppName} {#AppVersion}
+AppVerName={#AppDisplayName} {#AppVersion}
 ; 与旧版一致的安装目录，保证 UsePreviousAppDir 能原地升级到同一位置
 DefaultDirName={localappdata}\{#AppName}
 DisableDirPage=yes
-DefaultGroupName={#AppName}
+DefaultGroupName={#AppDisplayName}
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 ; 刻意不设 PrivilegesRequiredOverridesAllowed：安装目录在 %LOCALAPPDATA% 下、
@@ -95,15 +99,15 @@ Source: "{#BuildDir}\_internal\clock\config.yml"; DestDir: "{app}\_internal\cloc
 Source: "killapp.ps1"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{userprograms}\{#AppName}\{#AppName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; IconFilename: "{app}\{#AppExeName}"
-Name: "{userprograms}\{#AppName}\卸载 {#AppName}"; Filename: "{uninstallexe}"; IconFilename: "{app}\{#AppExeName}"
-Name: "{userdesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; Tasks: desktopicon; IconFilename: "{app}\{#AppExeName}"
+Name: "{userprograms}\{#AppDisplayName}\{#AppDisplayName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; IconFilename: "{app}\{#AppExeName}"
+Name: "{userprograms}\{#AppDisplayName}\卸载 {#AppDisplayName}"; Filename: "{uninstallexe}"; IconFilename: "{app}\{#AppExeName}"
+Name: "{userdesktop}\{#AppDisplayName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; Tasks: desktopicon; IconFilename: "{app}\{#AppExeName}"
 ; 开机自启走"启动"文件夹的快捷方式而不是注册表 Run 键：用户能直接在
 ; "启动"里看到并删掉它，卸载时 Inno 也会自动清理。
-Name: "{userstartup}\{#AppName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; Tasks: startupicon; IconFilename: "{app}\{#AppExeName}"
+Name: "{userstartup}\{#AppDisplayName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; Tasks: startupicon; IconFilename: "{app}\{#AppExeName}"
 
 [Run]
-Filename: "{app}\{#AppExeName}"; Description: "立即运行 {#AppName}"; Flags: postinstall nowait skipifsilent unchecked
+Filename: "{app}\{#AppExeName}"; Description: "立即运行 {#AppDisplayName}"; Flags: postinstall nowait skipifsilent unchecked
 
 [UninstallDelete]
 ; 运行时生成的图片与日志由主程序写在 %LOCALAPPDATA%\DesktopBackground\ 下，
@@ -158,8 +162,9 @@ begin
   Result := '';
 end;
 
-{ 与 modules/paths.py 的 _appDir() 保持一致：{app} 的反斜杠换成斜杠，
-  A-Z 转小写，其余原样（非 ASCII 字符不动，Python 侧同样只转 ASCII）。 }
+{ 与 modules/paths.py 的 _appDir() 保持一致：安装目录的反斜杠换成斜杠，
+  A-Z 转小写，其余原样（非 ASCII 字符不动，Python 侧同样只转 ASCII）。
+  注释里不能写花括号常量：它会提前闭合注释。 }
 function OwnDirTag: String;
 var
   S: String;
@@ -177,7 +182,9 @@ end;
 procedure RemoveOwnDataIn(const Root: String);
 var
   FindRec: TFindRec;
-  Content, Tag: String;
+  { LoadStringFromFile 要求 AnsiString；标记内容是 ASCII 路径，够用 }
+  Content: AnsiString;
+  Tag: String;
   Dir: String;
 begin
   if not FindFirst(Root + '\*', FindRec) then
@@ -191,7 +198,7 @@ begin
         { 标记文件由 modules/paths.py 写入，内容是 exe 所在目录 }
         if FileExists(Dir + '\.instance-key') and
            LoadStringFromFile(Dir + '\.instance-key', Content) and
-           (CompareText(Trim(Content), Tag) = 0) then
+           (CompareText(Trim(String(Content)), Tag) = 0) then
           DelTree(Dir, True, True, True);
       end;
     until not FindNext(FindRec);
@@ -221,10 +228,10 @@ begin
     RemoveOldLauncher;
 end;
 
-{ 卸载时结束本程序的进程。走 CurUninstallStepChanged 而不是 [UninstallRun]：
-  [UninstallRun] 没法按条件跳过，而这里必须能判断"当前是否提权"。
+{ 卸载时结束本程序的进程。走 CurUninstallStepChanged 而不是 UninstallRun 段：
+  那个段没法按条件跳过，而这里必须能判断"当前是否提权"。
 
-  killapp.ps1 装在 {app} 下，用户可写。正常情况下卸载器以当前用户运行，替换
+  killapp.ps1 装在安装目录下，用户可写。正常情况下卸载器以当前用户运行，替换
   它没有任何收益；但如果用户手动右键"以管理员身份运行"卸载器，执行用户可写
   的脚本就成了提权执行点，所以提权时直接跳过——文件被占用时 Inno 会提示重启。 }
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);

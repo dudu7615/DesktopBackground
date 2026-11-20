@@ -42,8 +42,11 @@ jobs:
     # 按**版本号**排队，而不是按分支：连续合并两个版本时两个版本各有各的组，
     # 不会被后来的 run 顶掉（按分支分组时，待跑的 run 只保留最后一个）。
     # 同一个版本重复触发则排队跑，不并发发布，避免两个 run 抢同一份 Release 产物。
+    #
+    # 非 main 的手动触发单独一组：它不发布，却和 main 的 run 共用组的话，
+    # 一个手动 run 就能把排队中的 main 发布 run 顶掉，那个版本就发不出去了。
     concurrency:
-      group: release-${{ needs.meta.outputs.version }}
+      group: release-${{ github.ref == 'refs/heads/main' && 'main' || 'validate' }}-${{ needs.meta.outputs.version }}
       cancel-in-progress: false
     permissions:
       contents: write # softprops/action-gh-release 要建 Release、上传产物
@@ -85,19 +88,39 @@ jobs:
           # 只有 main 上的构建才发布；手动触发跑别的分支时只验证打包。
           $onMain = "${{ github.ref }}" -eq "refs/heads/main"
 
-          # tag 在、但 Release 不在（或一个产物都没有）说明上次发到一半失败，
-          # 允许补发；完整发布过就跳过，免得每推一次 main 都改写 Release 说明。
+          # 发布完成 = 两个产物都在（安装包 + 便携版 zip）。只看"有没有产物"会把
+          # 传到一半失败的 Release 当成已完成，之后再也不补发。
+          $tagExists = [bool](git tag --list $tag)
+          $tagElsewhere = $false
           $published = $false
-          if (git tag --list $tag) {
-            $raw = gh release view $tag --json assets --jq '.assets | length' 2>$null
-            if ($LASTEXITCODE -eq 0 -and $raw) { $published = ([int]$raw -gt 0) }
+          if ($tagExists) {
+            # tag 指向别的提交：产物对应的是这次的源码，tag 却指着别处
+            if ((git rev-list -n1 $tag) -ne "${{ github.sha }}") { $tagElsewhere = $true }
+            $names = gh release view $tag --json assets --jq '.assets[].name' 2>$null
+            $hasExe = [bool]($names -match '\.exe$')
+            $hasZip = [bool]($names -match '\.zip$')
+            $published = ($LASTEXITCODE -eq 0 -and $hasExe -and $hasZip)
           }
 
           $publish = $onMain -and (-not $published)
+
+          # 已有更高的版本 tag（比如 1.2.0 先发完、1.1.0 后构建完）时，这次发的
+          # 只能是普通 release，不能顶掉 latest。按去掉 v 前缀后的 [version] 比较。
+          $isLatest = "true"
+          $existing = git tag --list "v*" |
+            ForEach-Object { $_.TrimStart('v') } |
+            Where-Object { $_ -match '^\d+(\.\d+)*$' -and $_.Trim() -ne $v }
+          foreach ($t in $existing) {
+            if ([version]$t -gt [version]$v) { $isLatest = "false"; break }
+          }
+
           "version=$v" >> $env:GITHUB_OUTPUT
           "tag=$tag" >> $env:GITHUB_OUTPUT
           "publish=$($publish.ToString().ToLower())" >> $env:GITHUB_OUTPUT
-          Write-Host "版本 $v，tag $tag，是否 main 构建：$onMain，是否已完整发布：$published，本次发布：$publish"
+          "tag_elsewhere=$($tagElsewhere.ToString().ToLower())" >> $env:GITHUB_OUTPUT
+          "already_published=$($published.ToString().ToLower())" >> $env:GITHUB_OUTPUT
+          "is_latest=$isLatest" >> $env:GITHUB_OUTPUT
+          Write-Host "版本 $v，tag $tag，是否 main 构建：$onMain，是否已完整发布：$published，tag 是否指向别的提交：$tagElsewhere，本次发布：$publish，设为 latest：$isLatest"
 
       - name: 生成安装包
         shell: pwsh
@@ -125,7 +148,9 @@ jobs:
             dist/DesktopBackground-portable-*.zip
 
       - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
-        if: steps.ver.outputs.publish == 'true'
+        # tag 已存在却指向别的提交时绝不发布：target_commitish 不会移动已有 tag，
+        # 硬发会把这次构建的产物挂到一个源码对不上的 tag 上。
+        if: steps.ver.outputs.publish == 'true' && steps.ver.outputs.tag_elsewhere != 'true'
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
           # 显式钉在本次构建的提交上：不写的话，默认分支在构建期间前进了，
@@ -133,17 +158,28 @@ jobs:
           target_commitish: ${{ github.sha }}
           name: DesktopBackground ${{ steps.ver.outputs.version }}
           generate_release_notes: true
+          # 两个版本连着合并时，两个版本各自排队、可能并发构建。谁先构建完谁先发，
+          # 不显式指定的话"最后发布的"会变成 latest——旧版本后完成就会盖掉新的。
+          # 版本号排序更高的一律 latest，旧的只是普通 release。
+          make_latest: ${{ steps.ver.outputs.is_latest }}
           files: |
             dist/installer/*.exe
             dist/DesktopBackground-portable-*.zip
 
       - name: 没发 Release，说明原因
-        if: steps.ver.outputs.publish != 'true'
+        # publish=true 但 tag 指向别处时也要进来报错
+        if: steps.ver.outputs.publish != 'true' || steps.ver.outputs.tag_elsewhere == 'true'
         shell: pwsh
         run: |
           if ("${{ github.ref }}" -ne "refs/heads/main") {
             Write-Host "::notice::不是 main 上的构建，只打包验证，不发布 Release。"
-          } else {
+          } elseif ("${{ steps.ver.outputs.already_published }}" -eq "true") {
+            # 这个版本早发完了，之后 main 上的普通推送走到这里属正常情况，
+            # 此时 tag 指向旧提交也是对的
             Write-Host "::notice::版本 ${{ needs.meta.outputs.version }} 已有完整 Release，安装包只作为 CI 产物上传。"
             Write-Host "::notice::要发新版本，请先在 PR 里改 pyproject.toml 的 version 再合并。"
+          } else {
+            Write-Host "::error::tag ${{ steps.ver.outputs.tag }} 已存在且指向别的提交，产物与 tag 对应的源码不一致，拒绝发布。"
+            Write-Host "::error::请确认版本号是否写错，或手动处理已有 tag/Release 后重跑。"
+            exit 1
           }

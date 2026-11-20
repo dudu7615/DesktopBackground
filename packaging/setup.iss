@@ -66,14 +66,15 @@ Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: 
 Name: "startupicon"; Description: "添加到开机启动"; GroupDescription: "快捷方式："; Flags: checkedonce
 
 [InstallDelete]
-; 覆盖升级时清掉旧版留在安装根目录的文件。V1.0.x 的产物叫 main.exe，
-; 一并删掉——否则升级后会留下两个 exe，开机启动项指的还是旧的那个。
+; 覆盖升级时清掉旧版留在安装根目录的 main.exe。V1.0.x 的产物叫它，
+; 不删的话升级后会留下两个 exe，开机启动项指的还是旧的那个。
 ;
 ; 注意这里**不删 _internal**：用户的 clock/config.yml 就在
 ; _internal\clock\ 下，整目录删掉会把自定义配置抹掉；而且先删后装，一旦
 ; 安装中途失败，旧程序就只剩一个 exe、跑不起来了。_internal 里的旧文件
 ; 靠 [Files] 的 ignoreversion 覆盖即可，残留的额外文件最多占点空间。
 Type: files; Name: "{app}\main.exe"
+; 旧版可能把图标放在安装根目录；新版在 _internal\ 下，这一条只是清残留
 Type: files; Name: "{app}\icon.ico"
 
 [Files]

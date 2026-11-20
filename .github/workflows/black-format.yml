@@ -35,7 +35,9 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          python-version: "3.12"
+          # 和项目一致（.python-version = 3.14）：用低版本跑 black 会提示
+          # "cannot parse code formatted for Python 3.1x"，安全校验也会跳过
+          python-version: "3.14"
           cache: "pip"
 
       - name: Install black

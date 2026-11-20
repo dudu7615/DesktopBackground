@@ -1,6 +1,6 @@
 [project]
 name = "desktopbackground"
-version = "1.1.0"
+version = "1.1.1"
 description = "电脑时钟桌面"
 readme = "README.md"
 requires-python = ">=3.14"

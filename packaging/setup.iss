@@ -1,7 +1,7 @@
 ; DesktopBackground 安装脚本（Inno Setup 6+）。
 ;
 ; 编译（Windows 上）：
-;     ISCC.exe /DAppVersion=1.1.0 packaging\setup.iss
+;     ISCC.exe /DAppVersion=1.1.1 packaging\setup.iss
 ; 产物在 dist\installer\DesktopBackground-Setup-<版本>.exe
 ;
 ; 安装范围只针对当前用户（PrivilegesRequired=lowest），不弹 UAC，装到
@@ -26,7 +26,7 @@
 #define AppExeName "DesktopBackground.exe"
 
 #ifndef AppVersion
-  #define AppVersion "1.1.0"
+  #define AppVersion "1.1.1"
 #endif
 
 ; spec 生成的目录名与仓库根同级，即 <仓库>/dist/DesktopBackground

@@ -16,8 +16,9 @@ Linux 上调试见 `dev/README.md`（用 `dev/win32_stub` 顶替 pywin32）。
 Windows 专用，PyInstaller 不支持交叉编译。详细说明见 [`packaging/README.md`](packaging/README.md)。
 
 ```powershell
-packaging\build.bat              # 只出 exe → dist\DesktopBackground\
-packaging\build_installer.bat    # 出安装包 → dist\installer\
+uv sync --group build
+uv run pyinstaller packaging/main.spec --noconfirm --clean   # → dist/DesktopBackground/
+ISCC.exe /DAppVersion=1.1.0 packaging\setup.iss              # → dist\installer\
 ```
 
 ## 发布

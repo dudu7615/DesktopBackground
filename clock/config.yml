@@ -1,6 +1,8 @@
 name: 金榜题名
 size: [1680, 1050]
-font: ["msyh.ttc", 60]
+font: 
+  name: MapleMono-NF-CN-Regular.ttf
+  size: 60
 color: [255, 255, 255]  # 绘制文字的颜色
 place: 
   weather: [935, 540]

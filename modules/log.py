@@ -1,31 +1,28 @@
+import sys
+
 from loguru import logger
-from pathlib import Path
-import datetime
+
+from .paths import logDir
+
+__all__ = ["logger", "setupLogging"]
 
 
-LOG = Path(__file__).parent.parent / "log"
-LOG.mkdir(exist_ok=True)
+def setupLogging() -> None:
+    """打包成无控制台的 exe 后没有 stderr，诊断信息改落到文件。"""
+    if not getattr(sys, "frozen", False):
+        # 开发时直接看终端输出就够了
+        return
 
-logDir = LOG / f"{datetime.datetime.now():%Y-%m-%d_%H-%M-%S}"
-logDir.mkdir(exist_ok=True)
+    # console=False 的 windowed exe 里 sys.stderr 是 None，默认 sink 写不进去，
+    # 留着只会静默丢弃日志，不如摘掉
+    if sys.stderr is None:
+        logger.remove()
 
-# logger.add(
-#     f"{logDir}/DEBUG.log",
-#     level="DEBUG",
-# )
-# logger.add(
-#     f"{logDir}/INFO.log",
-#     level="INFO",
-# )
-# logger.add(
-#     f"{logDir}/WARNING.log",
-#     level="WARNING",
-# )
-# logger.add(
-#     f"{logDir}/ERROR.log",
-#     level="ERROR",
-# )
-# logger.add(
-#     f"{logDir}/CRITICAL.log",
-#     level="CRITICAL",
-# )
+    # 每个安装位置一个日志文件：安装版与便携版可能同时开着，共用一个文件时
+    # loguru 的 rotation 属于不同进程、互不知情，会把对方的记录切走或写乱。
+    # 注意这是给诊断看的，不是多进程安全的审计日志。
+    # logDir() 会顺带写好归属标记，卸载器据此判断该不该删。
+    directory = logDir()
+    logger.add(
+        directory / "app.log", level="INFO", rotation="1 MB", retention=3, enqueue=True
+    )

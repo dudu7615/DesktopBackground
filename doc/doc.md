@@ -3,6 +3,13 @@
 1. 在电脑桌面显示时间、日期、天气
 2. 显示中考倒计时（吓唬同学用的）
 
+> 本文写于 V1.0.x，部分代码片段已经和当前实现不一致。以源码为准：
+> - `makeImg.weatherImg()` / `examDaysImg()` / `BgImg()` 现在接受两个路径参数
+>   `assets`（只读素材）与 `out`（运行时输出），见「PIL绘制图片」一节。
+> - 配置改用 pydantic 模型（`modules/dataClass.py`），`config.yml` 的 `font`
+>   是嵌套写法：`font: {name: ..., size: ...}`。
+> - 日志不再默认落盘，打包后写到 `%LOCALAPPDATA%`，见 `modules/log.py`。
+
 ## 预览
 
 ![效果展示](./img/show.png)
@@ -111,25 +118,28 @@ def getweather():
 
 ```python
 def weatherImg(
-    path: Path,
+    assets: Path,      # 只读素材目录（字体等）
+    out: Path,         # 运行时输出目录
     size: tuple[int, int],
     place: tuple[float, float],
     weather: str,
-    font: tuple[str, int],
+    font: Font,
     fill: tuple[int, int, int],
 ):
-    """绘制天气图片保存到path"""
-    textFont = ImageFont.truetype(*font)
+    """绘制天气图片保存到 out/weather.png"""
+    textFont = ImageFont.truetype(font=_fontFile(assets, font.name), size=font.size)
     img = Image.new("RGBA", size, (0, 0, 0, 0))
     ImageDraw.Draw(img).text(place, weather, font=textFont, fill=fill)
-    img.save(path / "weather.png")
+    img.save(out / "weather.png")
     logger.debug("绘制天气图片成功")
 ```
 
-1. `ImageFont.truetype()` 接受2个参数，分别为字体名称和字号
+1. `ImageFont.truetype()` 接受字体文件和字号；`_fontFile()` 会优先在 `assets`
+   里找同名字体文件，找不到才交给 PIL 按系统字体名查找
 2. `Image.new("RGBA", size, (0, 0, 0, 0))` 创建空白图片，使用rgba颜色，大小为 `size` 背景颜色为透明
 3. `ImageDraw.Draw(img)` 创建了新的绘制对象 `.text(place, weather, font=textFont, fill=fill)` 绘制在 `place` 位置，`weather` 文字，`font` 字体，`fill` 颜色(rgb) 的文字
-4. 保存为 `weather.png`
+4. 保存为 `out/weather.png`。生成结果不写程序目录：安装目录可能只读，打包后
+   输出到 `%LOCALAPPDATA%\DesktopBackground\runtime\<实例名>\`
 
 ### 中考剩余天数
 
@@ -138,21 +148,24 @@ def weatherImg(
 ### 最终背景组合
 
 ```python
-def BgImg(path: Path, size: tuple[int, int], *imgs: str):
-    """合成背景图片"""
+def BgImg(assets: Path, out: Path, size: tuple[int, int], background: str, *layers: str):
+    """合成背景图片保存到 out/result.png"""
     logger.debug("开始合成背景图片")
-    img = Image.new("RGBA", size, (0, 0, 0, 0))
-    for imgPath in imgs:
-        logger.debug(f"正在合成背景图片{imgPath}")
-        new = Image.open(path / imgPath).convert("RGBA")
-        img.alpha_composite(new)
-    img.save(path / "result.png")
+    img = Image.open(assets / background).convert("RGBA")
+    for imgPath in layers:
+        # 图层先找 out（运行时生成的），再找 assets（自带的数字图）
+        path = out / imgPath
+        if not path.exists():
+            path = assets / imgPath
+        img.alpha_composite(Image.open(path).convert("RGBA"))
+    img.save(out / "result.png")
     logger.debug("合成背景图片成功")
 ```
 
-1. 创建大小为 `size` 的空白图片
-2. 把所有 `imgs` 中的元素以 `alpha_composite()` 混合，保留透明的（此处不能直接粘贴，那样会使透明设置失效）
-3. 保存
+1. 以 `assets` 里的 `background`（一般是 `bg.jpg`）作为底图
+2. 把 `layers` 中的元素以 `alpha_composite()` 混合，保留透明的（此处不能直接粘贴，那样会使透明设置失效）。
+   缺图层时跳过而不是整次失败：开机第一次合成时天气图可能还没生成
+3. 保存到 `out/result.png`
 
 ## 设置桌面背景
 
@@ -213,10 +226,11 @@ class ImgThread(Thread):
         # 中考剩余天数
         makeImg.examDaysImg(
             self.path,
+            self.path,
             tuple(self.config["size"]),
             tuple(self.config["place"]["exam"]),
             str((datetime(year=2024, month=6, day=16) - datetime.today()).days),  # 中考剩余天数
-            tuple(self.config["font"]),
+            config.font,   # 与 weatherImg 一样直接收 Font 模型
             tuple(self.config["color"]),
         )
 
@@ -226,6 +240,7 @@ class ImgThread(Thread):
             if datetime.now().minute != nowTime.minute or i:
                 nowTime = datetime.now()
                 makeImg.BgImg(
+                    self.path,
                     self.path,
                     tuple(self.config["size"]),
                     "bg.jpg",
@@ -276,6 +291,7 @@ class WeatherThread(Thread):
         while True:
             if datetime.now().minute == 0 or i:
                 makeImg.weatherImg(
+                    self.path,
                     self.path,
                     tuple(self.config["size"]),
                     tuple(self.config["place"]["weather"]),

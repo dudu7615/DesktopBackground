@@ -1,6 +1,6 @@
 [project]
 name = "desktopbackground"
-version = "0.1.0"
+version = "1.1.0"
 description = "电脑时钟桌面"
 readme = "README.md"
 requires-python = ">=3.14"
@@ -9,14 +9,15 @@ dependencies = [
     "loguru>=0.7.3",
     "lxml>=6.0.2",
     "pillow>=12.1.1",
+    "pydantic>=2.13.4",
     "pyside6>=6.10.2",
-    "pywin32>=311",
+    "pywin32>=311; sys_platform == 'win32'",
     "pyyaml>=6.0.3",
     "requests>=2.32.5",
 ]
 
 [dependency-groups]
-dev = [
-    "auto-py-to-exe>=2.48.1",
+# 打包用，不属于日常开发，默认不装：`uv sync --group build`
+build = [
     "pyinstaller>=6.19.0",
 ]

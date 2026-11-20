@@ -6,7 +6,7 @@ Windows 打包。**只能在 Windows 上执行**（PyInstaller 不支持交叉�
 uv sync --group build
 uv run pyinstaller packaging/main.spec --noconfirm --clean     # → dist/DesktopBackground/
 # 想在本机出安装包，再补一步（需自行安装 Inno Setup 6）：
-ISCC.exe /DAppVersion=1.1.0 packaging\setup.iss                # → dist/installer/*.exe
+ISCC.exe /DAppVersion=1.1.1 packaging\setup.iss                # → dist/installer/*.exe
 ```
 
 只看效果、不需要安装包时，跑完第一条就能双击 `dist/DesktopBackground/DesktopBackground.exe`。

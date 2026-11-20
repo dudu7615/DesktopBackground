@@ -18,7 +18,7 @@ Windows 专用，PyInstaller 不支持交叉编译。详细说明见 [`packaging
 ```powershell
 uv sync --group build
 uv run pyinstaller packaging/main.spec --noconfirm --clean   # → dist/DesktopBackground/
-ISCC.exe /DAppVersion=1.1.0 packaging\setup.iss              # → dist\installer\
+ISCC.exe /DAppVersion=1.1.1 packaging\setup.iss              # → dist\installer\
 ```
 
 ## 发布

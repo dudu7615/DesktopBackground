@@ -2,33 +2,58 @@ name: release
 
 # 合并进 main（或直接推到 main）就出安装包；也可以手动触发，用来验证打包流程没坏。
 #
-# 版本号以 pyproject.toml 里的 version 为准：有对应 tag 才建 Release，没有就
-# 只留 CI 产物。所以想真正发一个版本，就在 PR 里改 version，合并后自动出。
+# 版本号以 pyproject.toml 里的 version 为准。**只有 main 上的构建才会发 Release**：
+# 该版本还没有 Release（或 Release 里一个产物都没有，说明上次发到一半失败）才建，
+# 已经完整发布过就只留 CI 产物。手动触发跑别的分支时一律只打包不发布。
+# 所以想真正发一个版本，就在 PR 里改 version 再合并。
 on:
   push:
     branches: [main]
   workflow_dispatch:
 
-# 两次合并挨得很近时排队跑，别互相覆盖 Release
-concurrency:
-  group: release-${{ github.ref }}
-  cancel-in-progress: false
-
-# softprops/action-gh-release 要往 Release 里传文件
+# 默认只读；只有真正发 Release 的 job 才申请写权限
 permissions:
-  contents: write
+  contents: read
 
 jobs:
+  # 先单独读版本号：下面的 job 要按版本号排队（见 windows 的 concurrency），
+  # 而 concurrency 在 job 开始前就要算好，没法在同一个 job 内部读。
+  meta:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: 读出版本号
+        id: ver
+        run: |
+          v=$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' pyproject.toml | head -n1)
+          if [ -z "$v" ]; then
+            echo "pyproject.toml 里没读到 version" >&2
+            exit 1
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "版本 $v"
+
   windows:
     # PyInstaller 不支持交叉编译，只能在 Windows runner 上出 Windows 产物
+    needs: meta
     runs-on: windows-latest
+    # 按**版本号**排队，而不是按分支：连续合并两个版本时两个版本各有各的组，
+    # 不会被后来的 run 顶掉（按分支分组时，待跑的 run 只保留最后一个）。
+    # 同一个版本重复触发则排队跑，不并发发布，避免两个 run 抢同一份 Release 产物。
+    concurrency:
+      group: release-${{ needs.meta.outputs.version }}
+      cancel-in-progress: false
+    permissions:
+      contents: write # softprops/action-gh-release 要建 Release、上传产物
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          # 要查 tag 是否已存在，默认的浅克隆拿不到
+          # 要查 tag 是否存在，默认的浅克隆拿不到
           fetch-depth: 0
 
-      - uses: astral-sh/setup-uv@v7
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
         with:
           enable-cache: true
 
@@ -44,21 +69,35 @@ jobs:
         run: uv run pyinstaller packaging/main.spec --noconfirm --clean
 
       - name: 装 Inno Setup
-        run: choco install innosetup --no-progress -y
+        # 钉版本：新的 Inno 大版本偶尔会改向导/编译器行为
+        run: choco install innosetup --version=6.5.4 --no-progress -y
 
-      - name: 读出版本号，判断该不该建 Release
+      - name: 判断该不该发 Release
         id: ver
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          $v = (Select-String -Path pyproject.toml -Pattern '^version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
+          $v = "${{ needs.meta.outputs.version }}"
           $tag = "v$v"
           git fetch --tags --force --quiet
-          # tag 已经存在 = 这个版本发过了，只跑构建、不再建 Release
-          $isNew = -not (git tag --list $tag)
+
+          # 只有 main 上的构建才发布；手动触发跑别的分支时只验证打包。
+          $onMain = "${{ github.ref }}" -eq "refs/heads/main"
+
+          # tag 在、但 Release 不在（或一个产物都没有）说明上次发到一半失败，
+          # 允许补发；完整发布过就跳过，免得每推一次 main 都改写 Release 说明。
+          $published = $false
+          if (git tag --list $tag) {
+            $raw = gh release view $tag --json assets --jq '.assets | length' 2>$null
+            if ($LASTEXITCODE -eq 0 -and $raw) { $published = ([int]$raw -gt 0) }
+          }
+
+          $publish = $onMain -and (-not $published)
           "version=$v" >> $env:GITHUB_OUTPUT
           "tag=$tag" >> $env:GITHUB_OUTPUT
-          "release=$($isNew.ToString().ToLower())" >> $env:GITHUB_OUTPUT
-          Write-Host "版本 $v，tag $tag，是否新建 Release：$isNew"
+          "publish=$($publish.ToString().ToLower())" >> $env:GITHUB_OUTPUT
+          Write-Host "版本 $v，tag $tag，是否 main 构建：$onMain，是否已完整发布：$published，本次发布：$publish"
 
       - name: 生成安装包
         shell: pwsh
@@ -68,7 +107,7 @@ jobs:
                                  "C:\Program Files\Inno Setup*\ISCC.exe" |
                   Select-Object -First 1 -ExpandProperty FullName
           if (-not $iscc) { throw "找不到 ISCC.exe" }
-          & $iscc "/DAppVersion=${{ steps.ver.outputs.version }}" packaging\setup.iss
+          & $iscc "/DAppVersion=${{ needs.meta.outputs.version }}" packaging\setup.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC 失败" }
 
       # 顺带发个免安装版，方便本机先试
@@ -76,28 +115,35 @@ jobs:
         shell: pwsh
         run: |
           Compress-Archive -Path dist\DesktopBackground\* `
-            -DestinationPath "dist\DesktopBackground-portable-${{ steps.ver.outputs.version }}.zip"
+            -DestinationPath "dist\DesktopBackground-portable-${{ needs.meta.outputs.version }}.zip"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: DesktopBackground-windows-${{ steps.ver.outputs.version }}
+          name: DesktopBackground-windows-${{ needs.meta.outputs.version }}
           path: |
             dist/installer/*.exe
             dist/DesktopBackground-portable-*.zip
 
-      - uses: softprops/action-gh-release@v2
-        if: steps.ver.outputs.release == 'true'
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        if: steps.ver.outputs.publish == 'true'
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
+          # 显式钉在本次构建的提交上：不写的话，默认分支在构建期间前进了，
+          # tag 就会指到比产物更新的源码上
+          target_commitish: ${{ github.sha }}
           name: DesktopBackground ${{ steps.ver.outputs.version }}
           generate_release_notes: true
           files: |
             dist/installer/*.exe
             dist/DesktopBackground-portable-*.zip
 
-      - name: 版本号没变，跳过 Release
-        if: steps.ver.outputs.release != 'true'
+      - name: 没发 Release，说明原因
+        if: steps.ver.outputs.publish != 'true'
         shell: pwsh
         run: |
-          Write-Host "::notice::pyproject.toml 的版本仍是 ${{ steps.ver.outputs.version }}，已存在同名 Release。"
-          Write-Host "::notice::安装包已作为 CI 产物上传。要发新版本，请先在 PR 里改 pyproject.toml 的 version 再合并。"
+          if ("${{ github.ref }}" -ne "refs/heads/main") {
+            Write-Host "::notice::不是 main 上的构建，只打包验证，不发布 Release。"
+          } else {
+            Write-Host "::notice::版本 ${{ needs.meta.outputs.version }} 已有完整 Release，安装包只作为 CI 产物上传。"
+            Write-Host "::notice::要发新版本，请先在 PR 里改 pyproject.toml 的 version 再合并。"
+          }

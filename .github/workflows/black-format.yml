@@ -1,39 +1,51 @@
-# .github/workflows/black-format.yml
 name: Black Auto Format
 
 on:
   pull_request:
-    branches: [ main ]
+    branches: [main]
+
+# 同一个 PR 只保留最新一次运行：新 push 会取消上一次，避免两个 run 同时
+# 往同一分支提交格式化 commit 而撞成 non-fast-forward 失败
+concurrency:
+  group: black-format-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   black-format:
+    # fork 来的 PR 拿不到可写 token，push 一定失败，只会把 CI 判红。
+    # 这种 PR 让贡献者在本地跑 black；同仓库分支才自动回提。
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      pull-requests: write
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          ref: ${{ github.head_ref }}  # 检出PR的分支，而非主分支
+          # 显式指定 PR 的头仓库与头分支：只写 head_ref 时，checkout 会在
+          # 基仓库里找这个分支名，分支不存在就报错
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
           cache: "pip"
 
       - name: Install black
-        run: pip install black
+        # 钉版本：black 每个版本都可能调整格式，浮动版本会让 CI 的格式化结果
+        # 和本地不一致
+        run: pip install black==26.10.1
 
       - name: Run black format
         run: black .
 
       - name: Commit changes
-        uses: stefanzweifel/git-auto-commit-action@v5
+        uses: stefanzweifel/git-auto-commit-action@b863ae1933cb653a53c021fe36dbb774e1fb9403 # v5
         with:
-          commit_message: "style: auto format code with black"  # 提交信息
-          branch: ${{ github.head_ref }}  # 提交到PR分支
-          file_pattern: "**/*.py"  # 仅提交Python文件
+          commit_message: "style: auto format code with black" # 提交信息
+          branch: ${{ github.event.pull_request.head.ref }} # 提交到PR分支
+          file_pattern: "**/*.py" # 仅提交Python文件

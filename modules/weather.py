@@ -33,7 +33,7 @@ def getweather():
 
 @logger.catch
 def test():
-    print(getweather())
+    logger.info(getweather())
 
 
 if __name__ == "__main__":

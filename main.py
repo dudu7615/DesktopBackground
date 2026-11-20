@@ -1,15 +1,35 @@
+import os
 import sys
-import yaml
-import anyio
-from datetime import datetime
 from pathlib import Path
+
+import anyio
+import yaml
+from datetime import datetime
 from threading import Thread
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
 from PySide6.QtGui import QIcon, QAction
 from modules import makeImg, setBg, weather, logger, Config
+from modules.log import setupLogging
 
 ROOT = Path(__file__).parent
 IMGS_PATH = ROOT / "clock"
+
+
+def _outputPath() -> Path:
+    """运行时生成的图片写这里。
+
+    素材（config.yml、数字图、字体）是只读的，跟程序放一起；合成结果不能写回
+    _internal/，否则安装目录不可写（比如把便携版解压进 Program Files）时合成
+    直接失败。打包后用用户数据目录；开发时仍写 clock/，方便直接看效果。
+    """
+    if not getattr(sys, "frozen", False):
+        return IMGS_PATH
+    base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+    return base / "DesktopBackground" / "runtime"
+
+
+OUT_PATH = _outputPath()
+OUT_PATH.mkdir(parents=True, exist_ok=True)
 
 _config = yaml.load(
     (IMGS_PATH / "config.yml").read_text(encoding="utf-8"), Loader=yaml.FullLoader
@@ -29,17 +49,17 @@ async def img():
             nowTime = datetime.now()
             makeImg.BgImg(
                 IMGS_PATH,
+                OUT_PATH,
                 config.size,
                 "bg.jpg",
                 "weather.png",
-                # "exam.png",
                 f"month{nowTime.month}.png",
                 f"day{nowTime.day}.png",
                 f"hour{nowTime.hour}.png",
                 f"minute{nowTime.minute}.png",
                 f"weekday{nowTime.weekday()+1}.png",
             )
-            setBg.setBackGroundImg(IMGS_PATH / "result.png")
+            setBg.setBackGroundImg(OUT_PATH / "result.png")
 
         if i:
             i = False
@@ -53,6 +73,7 @@ async def exam():
     while True:
         makeImg.examDaysImg(
             IMGS_PATH,
+            OUT_PATH,
             config.size,
             config.place["exam"],
             str((examDate - datetime.now()).days),
@@ -69,6 +90,7 @@ async def weater():
         logger.debug(f"{datetime.now().minute}")
         makeImg.weatherImg(
             IMGS_PATH,
+            OUT_PATH,
             config.size,
             config.place["weather"],
             weather.getweather(),
@@ -105,6 +127,7 @@ async def main():
 
 
 if __name__ == "__main__":
+    setupLogging()
     logger.info("程序启动")
     Thread(target=anyio.run, args=(main,), daemon=True).start()
     app = QApplication(sys.argv)

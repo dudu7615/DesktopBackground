@@ -1,32 +1,28 @@
-from loguru import logger
+import os
+import sys
 from pathlib import Path
-import datetime
 
-__all__ = ["logger"]
+from loguru import logger
 
-# LOG = Path(__file__).parent.parent / "log"
-# LOG.mkdir(exist_ok=True)
+__all__ = ["logger", "setupLogging"]
 
-# logDir = LOG / f"{datetime.datetime.now():%Y-%m-%d_%H-%M-%S}"
-# logDir.mkdir(exist_ok=True)
 
-# logger.add(
-#     f"{logDir}/DEBUG.log",
-#     level="DEBUG",
-# )
-# logger.add(
-#     f"{logDir}/INFO.log",
-#     level="INFO",
-# )
-# logger.add(
-#     f"{logDir}/WARNING.log",
-#     level="WARNING",
-# )
-# logger.add(
-#     f"{logDir}/ERROR.log",
-#     level="ERROR",
-# )
-# logger.add(
-#     f"{logDir}/CRITICAL.log",
-#     level="CRITICAL",
-# )
+def setupLogging() -> None:
+    """打包成无控制台的 exe 后没有 stderr，诊断信息改落到文件。"""
+    if not getattr(sys, "frozen", False):
+        # 开发时直接看终端输出就够了
+        return
+
+    # console=False 的 windowed exe 里 sys.stderr 是 None，默认 sink 写不进去，
+    # 留着只会静默丢弃日志，不如摘掉
+    if sys.stderr is None:
+        logger.remove()
+
+    # 与运行时生成的图片放在同一处用户数据目录下（见 main.py 的 OUT_PATH）
+    logDir = (
+        Path(os.environ.get("LOCALAPPDATA", Path.home())) / "DesktopBackground" / "logs"
+    )
+    logDir.mkdir(parents=True, exist_ok=True)
+    logger.add(
+        logDir / "app.log", level="INFO", rotation="1 MB", retention=3, enqueue=True
+    )

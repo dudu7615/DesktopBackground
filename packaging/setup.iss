@@ -66,15 +66,14 @@ Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: 
 Name: "startupicon"; Description: "添加到开机启动"; GroupDescription: "快捷方式："; Flags: checkedonce
 
 [InstallDelete]
-; 覆盖升级时清掉旧版留在安装根目录的 main.exe。V1.0.x 的产物叫它，
-; 不删的话升级后会留下两个 exe，开机启动项指的还是旧的那个。
+; 这里只清确定可以提前删的东西。**不要在这里删 main.exe**：Inno 会先处理
+; [InstallDelete]、再复制 [Files]，而新的启动器叫 DesktopBackground.exe，
+; 万一复制阶段失败或被中断，旧安装就既没有 main.exe 也没有新 exe，彻底起不来。
+; 旧 main.exe 改在 [Code] 里安装成功后删除（见 RemoveOldLauncher）。
 ;
-; 注意这里**不删 _internal**：用户的 clock/config.yml 就在
-; _internal\clock\ 下，整目录删掉会把自定义配置抹掉；而且先删后装，一旦
-; 安装中途失败，旧程序就只剩一个 exe、跑不起来了。_internal 里的旧文件
-; 靠 [Files] 的 ignoreversion 覆盖即可，残留的额外文件最多占点空间。
-Type: files; Name: "{app}\main.exe"
-; 旧版可能把图标放在安装根目录；新版在 _internal\ 下，这一条只是清残留
+; 旧 main.exe 由 [Code] 在安装成功后删除（见 RemoveOldLauncher）。
+; 不在这里删 _internal：用户的 clock/config.yml 就在里面，而且先删后装，
+; 安装中途失败旧程序会残缺。旧文件靠 [Files] 的 ignoreversion 覆盖。
 Type: files; Name: "{app}\icon.ico"
 
 [Files]
@@ -133,8 +132,25 @@ begin
   KillApp(ExpandConstant('{app}\main.exe'));
 end;
 
+{ 安装成功后再删旧版 main.exe。放在 [InstallDelete] 里的话，它会在新文件
+  复制之前就被删掉——复制一旦失败，用户就两个 exe 都没有了。 }
+procedure RemoveOldLauncher;
+var
+  OldExe: String;
+begin
+  OldExe := ExpandConstant('{app}\main.exe');
+  if FileExists(OldExe) then
+    DeleteFile(OldExe);
+end;
+
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
   KillRunningApp;
   Result := '';
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
+    RemoveOldLauncher;
 end;

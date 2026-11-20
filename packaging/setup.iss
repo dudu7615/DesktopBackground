@@ -107,12 +107,13 @@ Filename: "{app}\{#AppExeName}"; Description: "立即运行 {#AppName}"; Flags: 
 
 [UninstallDelete]
 ; 运行时生成的图片与日志由主程序写在 %LOCALAPPDATA%\DesktopBackground\ 下，
-; 不是安装器装的，不显式删就会留在用户目录里。这里**只删本安装对应的那个
-; 子目录**（规则见下方 InstanceKey，与 modules/paths.py 的 instanceKey 一致）。
-; 不能删整个 runtime/logs 根——便携版用的是另一个子目录，删根会把它正在用的
-; 图一起清掉。
-Type: filesandordirs; Name: "{localappdata}\{#AppName}\runtime\{code:InstanceKey}"
-Type: filesandordirs; Name: "{localappdata}\{#AppName}\logs\{code:InstanceKey}"
+; 不是安装器装的，不显式删就会留在用户目录里。**不能删整个 runtime/logs
+; 根**：便携版用的是另一个子目录，删根会把它正在用的图一起清掉。
+;
+; 具体删哪个子目录由 [Code] 里的 RemoveOwnData 决定：程序启动时在目录里写下
+; 标记文件 .instance-key（内容是自己的 exe 路径），卸载器只删标记对得上
+; 本安装目录的那些。为什么不让安装器自己算目录名：那要求 Pascal Script 与
+; Python 的字符串处理逐字节一致（用户名可能是中文），两边很容易分叉。
 
 [Code]
 { 这是无窗口的托盘程序，Inno 的 Restart Manager 认不出它，不主动杀进程就会
@@ -157,35 +158,61 @@ begin
   Result := '';
 end;
 
-{ 与 modules/paths.py 的 instanceKey() 完全一致：
-  djb2 校验和（h = h*33 + 码点，按 32 位回绕）取 8 位十六进制，接 `_`，
-  再接 {app} 转小写、非 ASCII 字母数字换成下划线、取末 72 个字符。
-  两边算法不同步的话，卸载就清不到自己的运行期数据（或误删便携版的数据）。 }
-function InstanceKey(Param: String): String;
+{ 与 modules/paths.py 的 _appDir() 保持一致：{app} 的反斜杠换成斜杠，
+  A-Z 转小写，其余原样（非 ASCII 字符不动，Python 侧同样只转 ASCII）。 }
+function OwnDirTag: String;
 var
-  S, Readable: String;
+  S: String;
   I: Integer;
-  H: Int64;
 begin
-  S := Lowercase(ExpandConstant('{app}'));
-
-  { 用 Int64 再取低 32 位：Cardinal 上 H*33 会先溢出报错 }
-  H := 5381;
+  S := ExpandConstant('{app}');
+  StringChangeEx(S, '\', '/', True);
   for I := 1 to Length(S) do
-    H := (H * 33 + Ord(S[I])) and $FFFFFFFF;
+    if (S[I] >= 'A') and (S[I] <= 'Z') then
+      S[I] := Chr(Ord(S[I]) + 32);
+  Result := S;
+end;
 
-  Readable := '';
-  for I := 1 to Length(S) do
-  begin
-    if ((S[I] >= 'a') and (S[I] <= 'z')) or ((S[I] >= '0') and (S[I] <= '9')) then
-      Readable := Readable + S[I]
-    else
-      Readable := Readable + '_';
+{ 处理一个根目录：只删标记内容等于本安装目录的子目录。 }
+procedure RemoveOwnDataIn(const Root: String);
+var
+  FindRec: TFindRec;
+  Content, Tag: String;
+  Dir: String;
+begin
+  if not FindFirst(Root + '\*', FindRec) then
+    Exit;
+  Tag := OwnDirTag;
+  try
+    repeat
+      if (FindRec.Attributes and FILE_ATTRIBUTE_DIRECTORY) <> 0 then
+      begin
+        Dir := Root + '\' + FindRec.Name;
+        { 标记文件由 modules/paths.py 写入，内容是 exe 所在目录 }
+        if FileExists(Dir + '\.instance-key') and
+           LoadStringFromFile(Dir + '\.instance-key', Content) and
+           (CompareText(Trim(Content), Tag) = 0) then
+          DelTree(Dir, True, True, True);
+      end;
+    until not FindNext(FindRec);
+  finally
+    FindClose(FindRec);
   end;
-  if Length(Readable) > 72 then
-    Readable := Copy(Readable, Length(Readable) - 72 + 1, 72);
+end;
 
-  Result := Lowercase(IntToHex(H, 8)) + '_' + Readable;
+{ 删掉运行期数据里属于本安装的那部分。
+
+  归属看子目录里的标记文件 .instance-key（modules/paths.py 写入，内容是 exe
+  所在目录）。标记对得上的才删；没有标记（或标记是别的安装）的一律不动——
+  便携版、以及别的用户目录都安全。
+  不用 Inno 的 [UninstallDelete] 通配来删，是因为它没法先读标记再决定。 }
+procedure RemoveOwnData;
+var
+  Base: String;
+begin
+  Base := ExpandConstant('{localappdata}\{#AppName}');
+  RemoveOwnDataIn(Base + '\runtime');
+  RemoveOwnDataIn(Base + '\logs');
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
@@ -207,18 +234,22 @@ var
 begin
   if CurUninstallStep <> usUninstall then
     Exit;
-  if IsAdmin then
-    Exit;
+
+  { 先结束进程：程序还活着的话，删完数据它可能又写回去 }
   Script := ExpandConstant('{app}\killapp.ps1');
-  if not FileExists(Script) then
-    Exit;
-  Exec('powershell.exe',
-       '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + Script +
-       '" -ExePath "' + ExpandConstant('{app}\{#AppExeName}') + '"',
-       '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  { 顺带清掉旧版的 main.exe——从 V1.0.x 升级上来的机器上可能还开着它 }
-  Exec('powershell.exe',
-       '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + Script +
-       '" -ExePath "' + ExpandConstant('{app}\main.exe') + '"',
-       '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  if (not IsAdmin) and FileExists(Script) then
+  begin
+    Exec('powershell.exe',
+         '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + Script +
+         '" -ExePath "' + ExpandConstant('{app}\{#AppExeName}') + '"',
+         '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    { 顺带清掉旧版的 main.exe——从 V1.0.x 升级上来的机器上可能还开着它 }
+    Exec('powershell.exe',
+         '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + Script +
+         '" -ExePath "' + ExpandConstant('{app}\main.exe') + '"',
+         '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  end;
+
+  { 删数据与是否提权无关，始终执行（只看标记，不会动别的安装） }
+  RemoveOwnData;
 end;

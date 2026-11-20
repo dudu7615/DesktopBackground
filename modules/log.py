@@ -21,8 +21,8 @@ def setupLogging() -> None:
     # 每个安装位置一个日志文件：安装版与便携版可能同时开着，共用一个文件时
     # loguru 的 rotation 属于不同进程、互不知情，会把对方的记录切走或写乱。
     # 注意这是给诊断看的，不是多进程安全的审计日志。
+    # logDir() 会顺带写好归属标记，卸载器据此判断该不该删。
     directory = logDir()
-    directory.mkdir(parents=True, exist_ok=True)
     logger.add(
         directory / "app.log", level="INFO", rotation="1 MB", retention=3, enqueue=True
     )

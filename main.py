@@ -29,7 +29,9 @@ def _outputPath() -> Path:
 
 
 OUT_PATH = _outputPath()
-OUT_PATH.mkdir(parents=True, exist_ok=True)
+if not getattr(sys, "frozen", False):
+    # runtimeDir() 自己会建目录并写好归属标记；开发时用的 clock/ 本来就在
+    OUT_PATH.mkdir(parents=True, exist_ok=True)
 
 # 先接上文件日志再读配置：配置校验失败会让 windowed exe 直接退出，没有日志
 # 就什么线索都留不下。
